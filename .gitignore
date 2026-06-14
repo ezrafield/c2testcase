@@ -1,0 +1,71 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments and package output
+.c2testcases/
+.venv/
+venv/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Build and generated output
+build/
+dist/
+htmlcov/
+.coverage
+*.profraw
+*.profdata
+
+# Node or auxiliary tooling
+node_modules/
+
+# Agent-local files, skills, tools, memory, and generated context
+AGENTS.md
+CLAUDE.md
+**/AGENTS.md
+**/CLAUDE.md
+CLAUDE.local.md
+agentkit-manifest.json
+.agentkit-*
+.agents/
+.agent/
+.claude/
+.mcp/
+.codex-log/
+.sembleignore
+.understand-anything/
+docs/agent/
+eval/retrieval/
+.github/workflows/agent-doc-check.yml
+
+# Agent-kit helper scripts copied by the template
+scripts/agent_setup.py
+scripts/agentkit_installer.py
+scripts/audit_module_cards.py
+scripts/audit_task_logs.py
+scripts/check_architecture_boundaries.py
+scripts/check_context_staleness.py
+scripts/collect_task_trace.py
+scripts/detect_large_agent_files.py
+scripts/detect_large_context_docs.py
+scripts/generate_codemap.py
+scripts/run_targeted_tests.py
+scripts/search_understand_graph.py
+scripts/summarize_changed_files.py
+scripts/update_module_cards.py
+scripts/validate_agent_docs.py
+scripts/validate_understand_graph.py
+
+# Loose local planning and setup notes from the agent template
+agents_analysis.md
+estimate.md
+instruction.txt
+install.sh
+update.sh
+update/
+package.json
+.gitignore.sample

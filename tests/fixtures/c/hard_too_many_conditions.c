@@ -1,0 +1,35 @@
+int hard_too_many_conditions(
+    int a,
+    int b,
+    int c,
+    int d,
+    int e,
+    int f,
+    int g,
+    int h,
+    int i,
+    int j,
+    int k,
+    int l,
+    int m
+) {
+    if (
+        a > 0 &&
+        b > 0 &&
+        c > 0 &&
+        d > 0 &&
+        e > 0 &&
+        f > 0 &&
+        g > 0 &&
+        h > 0 &&
+        i > 0 &&
+        j > 0 &&
+        k > 0 &&
+        l > 0 &&
+        m > 0
+    ) {
+        return 1;
+    }
+
+    return 0;
+}
