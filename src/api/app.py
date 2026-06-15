@@ -429,18 +429,27 @@ def render_index_html() -> str:
       }
       const inferredVariables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
       const variables = [...new Set([...(state.report.input_variables || []), ...inferredVariables])];
+      rows.sort((left, right) => compareTestcaseRows(left, right, variables));
       const headers = [
-        "Testcase",
-        "Decision",
-        "Line",
-        "Decision Result",
-        "Covers Conditions",
-        "Condition Truths",
+        "TestCase_ID",
+        "Step_No",
+        "Step_Action",
         ...variables,
-        "Notes",
+        "Decision_Result",
       ];
       const table = document.createElement("table");
       const thead = table.createTHead();
+      const groupRow = thead.insertRow();
+      [
+        ["Step", 3],
+        ["Inputs", Math.max(variables.length, 1)],
+        ["Outputs", 1],
+      ].forEach(([label, span]) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        th.colSpan = span;
+        groupRow.append(th);
+      });
       const headerRow = thead.insertRow();
       headers.forEach((label) => {
         const th = document.createElement("th");
@@ -450,21 +459,18 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
+        const assignments = variables.map((name) => row.assignments?.[name] ?? "");
         const values = [
           `TC${index + 1}`,
-          row.decisionId,
-          row.line,
+          index + 1,
+          renderStepAction(variables, assignments),
+          ...assignments,
           row.decisionResult,
-          row.covers.join(", "),
-          row.values.map((value, valueIndex) => `C${valueIndex}=${value}`).join(", "),
-          ...variables.map((name) => row.assignments?.[name] ?? ""),
-          row.notes.join("; "),
         ];
         values.forEach((value, columnIndex) => {
           const td = tr.insertCell();
           td.textContent = String(value);
-          if (headers[columnIndex] === "Notes") td.className = "notes";
-          if (headers[columnIndex] === "Condition Truths") td.className = "truths";
+          if (headers[columnIndex] === "Step_Action") td.className = "notes";
         });
       });
       testcaseTable.append(table);
@@ -482,6 +488,27 @@ def render_index_html() -> str:
           notes: row.notes || [],
         }))
       );
+    }
+
+    function compareTestcaseRows(left, right, variables) {
+      if (left.decisionResult !== right.decisionResult) {
+        return left.decisionResult ? -1 : 1;
+      }
+      for (const variable of variables) {
+        const leftValue = String(left.assignments?.[variable] ?? "");
+        const rightValue = String(right.assignments?.[variable] ?? "");
+        const compared = leftValue.localeCompare(rightValue, undefined, { numeric: true });
+        if (compared !== 0) return compared;
+      }
+      return 0;
+    }
+
+    function renderStepAction(variables, assignments) {
+      const parts = variables
+        .map((name, index) => [name, assignments[index]])
+        .filter(([, value]) => value !== "")
+        .map(([name, value]) => `${name}=${value}`);
+      return parts.length ? `Set inputs ${parts.join(", ")}` : "Manual input setup";
     }
 
     function emptyNode(text) {

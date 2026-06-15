@@ -211,39 +211,54 @@ def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
         }
     )
     variable_names = list(dict.fromkeys((*report.input_variables, *inferred_variable_names)))
-    headers: list[str | int | bool] = [
-        "Testcase",
-        "Decision",
-        "Line",
-        "Decision Result",
-        "Covers Conditions",
-        "Condition Truths",
-        *variable_names,
-        "Notes",
+    group_headers: list[str | int | bool] = [
+        "Step",
+        "",
+        "",
+        *(["Inputs"] + [""] * (len(variable_names) - 1) if variable_names else []),
+        "Outputs",
     ]
-    rows: list[list[str | int | bool]] = [headers]
+    column_headers: list[str | int | bool] = [
+        "TestCase_ID",
+        "Step_No",
+        "Step_Action",
+        *variable_names,
+        "Decision_Result",
+    ]
+    rows: list[list[str | int | bool]] = [group_headers, column_headers]
     case_index = 1
     for result in report.decisions:
-        for row in result.cases:
+        for row in sorted(result.cases, key=lambda case: testcase_sort_key(case, variable_names)):
+            assignments = [row.assignments.get(name, "") for name in variable_names]
             rows.append(
                 [
                     f"TC{case_index}",
-                    result.decision.id,
-                    result.decision.line,
+                    case_index,
+                    render_step_action(variable_names, assignments),
+                    *assignments,
                     row.decision_result,
-                    ", ".join(str(index) for index in row.covers),
-                    ", ".join(
-                        f"C{index}={value}"
-                        for index, value in enumerate(row.values)
-                    ),
-                    *(row.assignments.get(name, "") for name in variable_names),
-                    "; ".join(row.notes),
                 ]
             )
             case_index += 1
-    if len(rows) == 1:
-        rows.append(["No generated testcases", "", "", "", "", "", *("" for _ in variable_names), ""])
+    if len(rows) == 2:
+        rows.append(["No generated testcases", "", "", *("" for _ in variable_names), ""])
     return rows
+
+
+def render_step_action(variable_names: list[str], assignments: list[int | bool | str]) -> str:
+    parts = [
+        f"{name}={value}"
+        for name, value in zip(variable_names, assignments)
+        if value != ""
+    ]
+    return f"Set inputs {', '.join(parts)}" if parts else "Manual input setup"
+
+
+def testcase_sort_key(row: MCDCRow, variable_names: list[str]) -> tuple[bool, tuple[str, ...]]:
+    return (
+        not row.decision_result,
+        tuple(str(row.assignments.get(name, "")) for name in variable_names),
+    )
 
 
 def xlsx_content_types() -> str:
@@ -314,29 +329,44 @@ def xlsx_sheet(rows: list[list[str | int | bool]]) -> str:
         for index, width in enumerate(column_widths(rows), start=1)
     )
     dimension = f"A1:{column_name(len(rows[0]))}{len(rows)}"
+    filter_dimension = f"A2:{column_name(len(rows[0]))}{len(rows)}"
+    merge_cells = xlsx_merge_cells(rows)
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="{dimension}"/>
   <sheetViews>
     <sheetView workbookViewId="0">
-      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+      <pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/>
     </sheetView>
   </sheetViews>
   <cols>{widths}</cols>
   <sheetData>
 {row_xml}
   </sheetData>
-  <autoFilter ref="{dimension}"/>
+  {merge_cells}
+  <autoFilter ref="{filter_dimension}"/>
 </worksheet>
 """
 
 
 def xlsx_row(row_index: int, row: list[str | int | bool]) -> str:
     cells = "".join(
-        xlsx_cell(row_index, column_index, value, style=1 if row_index == 1 else 0)
+        xlsx_cell(row_index, column_index, value, style=1 if row_index <= 2 else 0)
         for column_index, value in enumerate(row, start=1)
     )
     return f'    <row r="{row_index}">{cells}</row>'
+
+
+def xlsx_merge_cells(rows: list[list[str | int | bool]]) -> str:
+    if not rows or len(rows[0]) < 4:
+        return ""
+    input_start = 4
+    output_column = len(rows[0])
+    merge_ranges = ["A1:C1"]
+    if output_column > input_start:
+        merge_ranges.append(f"{column_name(input_start)}1:{column_name(output_column - 1)}1")
+    merge_xml = "".join(f'<mergeCell ref="{cell_range}"/>' for cell_range in merge_ranges)
+    return f'<mergeCells count="{len(merge_ranges)}">{merge_xml}</mergeCells>'
 
 
 def xlsx_cell(row_index: int, column_index: int, value: str | int | bool, style: int = 0) -> str:
