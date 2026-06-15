@@ -4,7 +4,6 @@
 !.env.example
 
 # Python environments and package output
-.c2testcases/
 .venv/
 venv/
 *.egg-info/
