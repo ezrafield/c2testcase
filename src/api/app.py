@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse
 from src.api.routes import health
 from src.services.mcdc_generator import MCDC_MODES, generate_mcdc_report, write_report_artifacts
 
+ManualValue = int | float | bool | str
+
 
 app = FastAPI(title="c2testcase", version="0.1.0")
 
@@ -30,6 +32,7 @@ async def generate_cases(
     headers: list[UploadFile] | None = File(default=None),
     target_function: str = Form(default=""),
     input_variables: str = Form(default=""),
+    output_variables: str = Form(default=""),
     compile_flags: str = Form(default=""),
     max_conditions: int = Form(default=12),
     mcdc_mode: str = Form(default="unique-cause"),
@@ -57,6 +60,8 @@ async def generate_cases(
             header_paths.append(header_path)
 
         output_dir = workspace / "out"
+        parsed_input_variables, manual_inputs = parse_variable_setup(input_variables)
+        parsed_output_variables, manual_outputs = parse_variable_setup(output_variables)
         report = generate_mcdc_report(
             source_path,
             max_conditions=max_conditions,
@@ -64,7 +69,10 @@ async def generate_cases(
             include_dirs=(workspace,),
             compile_flags=parse_compile_flags(compile_flags),
             target_function=target_function.strip() or None,
-            input_variables=parse_input_variables(input_variables),
+            input_variables=parsed_input_variables,
+            manual_inputs=manual_inputs,
+            output_variables=parsed_output_variables,
+            manual_outputs=manual_outputs,
             mcdc_mode=mcdc_mode,
         )
         json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, output_dir)
@@ -86,13 +94,38 @@ def parse_compile_flags(raw_flags: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw_flags.replace("\n", " ").split(" ") if part.strip())
 
 
-def parse_input_variables(raw_variables: str) -> tuple[str, ...]:
-    variables = [
-        part.strip()
-        for part in raw_variables.replace("\n", ",").split(",")
-        if part.strip()
-    ]
-    return tuple(dict.fromkeys(variables))
+def parse_variable_setup(raw_variables: str) -> tuple[tuple[str, ...], dict[str, ManualValue]]:
+    variables: list[str] = []
+    defaults: dict[str, ManualValue] = {}
+    for raw_part in raw_variables.replace("\n", ",").split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            name, value = part.split("=", 1)
+            name = name.strip()
+            if name:
+                variables.append(name)
+                defaults[name] = parse_manual_input_value(value.strip())
+            continue
+        variables.append(part)
+    return tuple(dict.fromkeys(variables)), defaults
+
+
+parse_input_variables = parse_variable_setup
+
+
+def parse_manual_input_value(value: str) -> ManualValue:
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if value.lstrip("-").isdigit():
+        return int(value)
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
 
 
 def safe_name(filename: str) -> str:
@@ -310,8 +343,10 @@ def render_index_html() -> str:
         <input id="headers" name="headers" type="file" accept=".h" multiple>
         <label for="target_function">Target function</label>
         <input id="target_function" name="target_function" type="text" placeholder="logic">
-        <label for="input_variables">Input variables</label>
-        <input id="input_variables" name="input_variables" type="text" placeholder="a, b, c">
+        <label for="input_variables">Manual input setup</label>
+        <input id="input_variables" name="input_variables" type="text" placeholder="a, b, IN_gear=D, IN_ignition=1">
+        <label for="output_variables">Manual output setup</label>
+        <input id="output_variables" name="output_variables" type="text" placeholder="VF24blatgfd_s=-24.5, VS15lat_grev=-2.5">
         <label for="compile_flags">Compile flags</label>
         <textarea id="compile_flags" name="compile_flags" placeholder="-DUNIT_TEST"></textarea>
         <label for="max_conditions">Max conditions</label>
@@ -429,22 +464,22 @@ def render_index_html() -> str:
       }
       const inferredVariables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
       const variables = [...new Set([...(state.report.input_variables || []), ...inferredVariables])];
+      const outputVariables = (state.report.output_variables || []).length
+        ? state.report.output_variables
+        : ["Decision_Result"];
       rows.sort((left, right) => compareTestcaseRows(left, right, variables));
       const headers = [
-        "TestCase_ID",
-        "Step_No",
-        "Step_Action",
+        "Step",
         ...variables,
-        "Decision_Result",
+        ...outputVariables,
       ];
       const table = document.createElement("table");
       const thead = table.createTHead();
       const groupRow = thead.insertRow();
-      [
-        ["Step", 3],
-        ["Inputs", Math.max(variables.length, 1)],
-        ["Outputs", 1],
-      ].forEach(([label, span]) => {
+      const groups = [["Mode", 1]];
+      if (variables.length) groups.push(["Inputs", variables.length]);
+      if (outputVariables.length) groups.push(["Outputs", outputVariables.length]);
+      groups.forEach(([label, span]) => {
         const th = document.createElement("th");
         th.textContent = label;
         th.colSpan = span;
@@ -459,18 +494,18 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
-        const assignments = variables.map((name) => row.assignments?.[name] ?? "");
+        const assignments = variables.map((name) => row.assignments?.[name] ?? state.report.manual_inputs?.[name] ?? "");
+        const outputs = outputVariables.map((name) =>
+          name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? ""
+        );
         const values = [
-          `TC${index + 1}`,
-          index + 1,
-          renderStepAction(variables, assignments),
+          index,
           ...assignments,
-          row.decisionResult,
+          ...outputs,
         ];
         values.forEach((value, columnIndex) => {
           const td = tr.insertCell();
           td.textContent = String(value);
-          if (headers[columnIndex] === "Step_Action") td.className = "notes";
         });
       });
       testcaseTable.append(table);
@@ -501,14 +536,6 @@ def render_index_html() -> str:
         if (compared !== 0) return compared;
       }
       return 0;
-    }
-
-    function renderStepAction(variables, assignments) {
-      const parts = variables
-        .map((name, index) => [name, assignments[index]])
-        .filter(([, value]) => value !== "")
-        .map(([name, value]) => `${name}=${value}`);
-      return parts.length ? `Set inputs ${parts.join(", ")}` : "Manual input setup";
     }
 
     function emptyNode(text) {

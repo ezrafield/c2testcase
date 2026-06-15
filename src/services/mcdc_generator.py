@@ -17,6 +17,7 @@ BOOLEAN_OPERATORS = {"&&", "||"}
 KEYWORDS_WITH_DECISIONS = {"if", "while"}
 MAX_ENUMERATED_CONDITIONS = 12
 MCDC_MODES = ("unique-cause", "masking", "multicondition")
+TableValue = str | int | float | bool
 TOOLCHAIN_COMMANDS = {
     "clang": ("clang", "--version"),
     "llvm-cov": ("llvm-cov", "--version"),
@@ -68,6 +69,9 @@ class MCDCReport:
     source: str
     decisions: tuple[DecisionResult, ...]
     input_variables: tuple[str, ...] = field(default_factory=tuple)
+    manual_inputs: dict[str, TableValue] = field(default_factory=dict)
+    output_variables: tuple[str, ...] = field(default_factory=tuple)
+    manual_outputs: dict[str, TableValue] = field(default_factory=dict)
     headers: tuple[str, ...] = field(default_factory=tuple)
     include_dirs: tuple[str, ...] = field(default_factory=tuple)
     compile_flags: tuple[str, ...] = field(default_factory=tuple)
@@ -93,6 +97,9 @@ class MCDCReport:
             "mcdc_mode": self.mcdc_mode,
             "target_function": self.target_function,
             "input_variables": list(self.input_variables),
+            "manual_inputs": self.manual_inputs,
+            "output_variables": list(self.output_variables),
+            "manual_outputs": self.manual_outputs,
             "headers": list(self.headers),
             "include_dirs": list(self.include_dirs),
             "compile_flags": list(self.compile_flags),
@@ -143,6 +150,9 @@ def generate_mcdc_report(
     compile_flags: tuple[str, ...] = (),
     target_function: str | None = None,
     input_variables: tuple[str, ...] = (),
+    manual_inputs: dict[str, TableValue] | None = None,
+    output_variables: tuple[str, ...] = (),
+    manual_outputs: dict[str, TableValue] | None = None,
     mcdc_mode: str = "unique-cause",
 ) -> MCDCReport:
     if mcdc_mode not in MCDC_MODES:
@@ -163,6 +173,9 @@ def generate_mcdc_report(
         source=str(source_path),
         decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode) for decision in decisions),
         input_variables=tuple(dict.fromkeys(input_variables)),
+        manual_inputs=manual_inputs or {},
+        output_variables=tuple(dict.fromkeys(output_variables)),
+        manual_outputs=manual_outputs or {},
         headers=tuple(str(path) for path in headers),
         include_dirs=tuple(str(path) for path in include_dirs),
         compile_flags=compile_flags,
@@ -201,7 +214,7 @@ def write_testcase_workbook(report: MCDCReport, output_path: Path) -> None:
         workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows))
 
 
-def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
+def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     inferred_variable_names = sorted(
         {
             name
@@ -211,47 +224,37 @@ def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
         }
     )
     variable_names = list(dict.fromkeys((*report.input_variables, *inferred_variable_names)))
-    group_headers: list[str | int | bool] = [
-        "Step",
-        "",
-        "",
+    output_names = list(report.output_variables) or ["Decision_Result"]
+    group_headers: list[TableValue] = [
+        "Mode",
         *(["Inputs"] + [""] * (len(variable_names) - 1) if variable_names else []),
-        "Outputs",
+        *(["Outputs"] + [""] * (len(output_names) - 1) if output_names else []),
     ]
-    column_headers: list[str | int | bool] = [
-        "TestCase_ID",
-        "Step_No",
-        "Step_Action",
+    column_headers: list[TableValue] = [
+        "Step",
         *variable_names,
-        "Decision_Result",
+        *output_names,
     ]
-    rows: list[list[str | int | bool]] = [group_headers, column_headers]
-    case_index = 1
+    rows: list[list[TableValue]] = [group_headers, column_headers]
+    step_index = 0
     for result in report.decisions:
         for row in sorted(result.cases, key=lambda case: testcase_sort_key(case, variable_names)):
-            assignments = [row.assignments.get(name, "") for name in variable_names]
+            assignments = [row.assignments.get(name, report.manual_inputs.get(name, "")) for name in variable_names]
+            outputs = [
+                row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "")
+                for name in output_names
+            ]
             rows.append(
                 [
-                    f"TC{case_index}",
-                    case_index,
-                    render_step_action(variable_names, assignments),
+                    step_index,
                     *assignments,
-                    row.decision_result,
+                    *outputs,
                 ]
             )
-            case_index += 1
+            step_index += 1
     if len(rows) == 2:
-        rows.append(["No generated testcases", "", "", *("" for _ in variable_names), ""])
+        rows.append(["No generated testcases", *("" for _ in variable_names), *("" for _ in output_names)])
     return rows
-
-
-def render_step_action(variable_names: list[str], assignments: list[int | bool | str]) -> str:
-    parts = [
-        f"{name}={value}"
-        for name, value in zip(variable_names, assignments)
-        if value != ""
-    ]
-    return f"Set inputs {', '.join(parts)}" if parts else "Manual input setup"
 
 
 def testcase_sort_key(row: MCDCRow, variable_names: list[str]) -> tuple[bool, tuple[str, ...]]:
@@ -322,7 +325,7 @@ def xlsx_styles() -> str:
 """
 
 
-def xlsx_sheet(rows: list[list[str | int | bool]]) -> str:
+def xlsx_sheet(rows: list[list[TableValue]]) -> str:
     row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(rows, start=1))
     widths = "".join(
         f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
@@ -349,7 +352,7 @@ def xlsx_sheet(rows: list[list[str | int | bool]]) -> str:
 """
 
 
-def xlsx_row(row_index: int, row: list[str | int | bool]) -> str:
+def xlsx_row(row_index: int, row: list[TableValue]) -> str:
     cells = "".join(
         xlsx_cell(row_index, column_index, value, style=1 if row_index <= 2 else 0)
         for column_index, value in enumerate(row, start=1)
@@ -357,30 +360,39 @@ def xlsx_row(row_index: int, row: list[str | int | bool]) -> str:
     return f'    <row r="{row_index}">{cells}</row>'
 
 
-def xlsx_merge_cells(rows: list[list[str | int | bool]]) -> str:
-    if not rows or len(rows[0]) < 4:
+def xlsx_merge_cells(rows: list[list[TableValue]]) -> str:
+    if not rows:
         return ""
-    input_start = 4
-    output_column = len(rows[0])
-    merge_ranges = ["A1:C1"]
-    if output_column > input_start:
-        merge_ranges.append(f"{column_name(input_start)}1:{column_name(output_column - 1)}1")
+    merge_ranges: list[str] = []
+    start_column = 1
+    current_label = str(rows[0][0])
+    for column_index, value in enumerate(rows[0][1:], start=2):
+        label = str(value)
+        if label:
+            if column_index - start_column > 1:
+                merge_ranges.append(f"{column_name(start_column)}1:{column_name(column_index - 1)}1")
+            start_column = column_index
+            current_label = label
+    if len(rows[0]) - start_column >= 1 and current_label:
+        merge_ranges.append(f"{column_name(start_column)}1:{column_name(len(rows[0]))}1")
+    if not merge_ranges:
+        return ""
     merge_xml = "".join(f'<mergeCell ref="{cell_range}"/>' for cell_range in merge_ranges)
     return f'<mergeCells count="{len(merge_ranges)}">{merge_xml}</mergeCells>'
 
 
-def xlsx_cell(row_index: int, column_index: int, value: str | int | bool, style: int = 0) -> str:
+def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
     reference = f"{column_name(column_index)}{row_index}"
     style_attr = f' s="{style}"' if style else ""
     if isinstance(value, bool):
         return f'<c r="{reference}" t="b"{style_attr}><v>{int(value)}</v></c>'
-    if isinstance(value, int):
+    if isinstance(value, int | float):
         return f'<c r="{reference}"{style_attr}><v>{value}</v></c>'
     text = escape(str(value))
     return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t>{text}</t></is></c>'
 
 
-def column_widths(rows: list[list[str | int | bool]]) -> list[int]:
+def column_widths(rows: list[list[TableValue]]) -> list[int]:
     widths: list[int] = []
     for column in range(len(rows[0])):
         max_length = max(len(str(row[column])) for row in rows)

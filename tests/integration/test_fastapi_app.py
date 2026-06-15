@@ -30,7 +30,8 @@ def test_web_app_generates_mcdc_artifacts() -> None:
         "/api/generate",
         data={
             "target_function": "logic",
-            "input_variables": "a, b, flag, expected",
+            "input_variables": "a, b, flag, expected=PASS, IN_gear=D",
+            "output_variables": "VF24blatgfd_s=-24.5, VS15lat_grev=-2.5",
             "compile_flags": "-DUNIT_TEST",
             "max_conditions": "12",
             "mcdc_mode": "masking",
@@ -49,7 +50,10 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     assert response.status_code == 200
     assert payload["report"]["score"] == 1.0
     assert payload["report"]["mcdc_mode"] == "masking"
-    assert payload["report"]["input_variables"] == ["a", "b", "flag", "expected"]
+    assert payload["report"]["input_variables"] == ["a", "b", "flag", "expected", "IN_gear"]
+    assert payload["report"]["manual_inputs"] == {"expected": "PASS", "IN_gear": "D"}
+    assert payload["report"]["output_variables"] == ["VF24blatgfd_s", "VS15lat_grev"]
+    assert payload["report"]["manual_outputs"] == {"VF24blatgfd_s": -24.5, "VS15lat_grev": -2.5}
     assert "coverage_ready" in payload["report"]
     assert "coverage_status" in payload["report"]
     assert "toolchain_details" in payload["report"]

@@ -5,6 +5,8 @@ from pathlib import Path
 
 from src.services.mcdc_generator import MCDC_MODES, generate_mcdc_report, write_report_artifacts
 
+ManualValue = int | float | bool | str
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -34,7 +36,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-variable",
         action="append",
         default=[],
-        help="Input variable to include as a testcase table column. Repeat or use comma-separated names.",
+        help="Input variable column, optionally with a manual default such as gear=D. Repeat or use commas.",
+    )
+    parser.add_argument(
+        "--output-variable",
+        action="append",
+        default=[],
+        help="Output variable column, optionally with a baseline value such as state=DRIVE. Repeat or use commas.",
     )
     parser.add_argument(
         "--compile-flag",
@@ -80,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         if not include_dir.exists() or not include_dir.is_dir():
             raise SystemExit(f"Include directory not found: {include_dir}")
 
+    input_variables, manual_inputs = parse_variable_setup(args.input_variable)
+    output_variables, manual_outputs = parse_variable_setup(args.output_variable)
     report = generate_mcdc_report(
         args.source,
         max_conditions=args.max_conditions,
@@ -87,7 +97,10 @@ def main(argv: list[str] | None = None) -> int:
         include_dirs=include_dirs,
         compile_flags=tuple(args.compile_flag),
         target_function=args.target_function,
-        input_variables=parse_input_variables(args.input_variable),
+        input_variables=input_variables,
+        manual_inputs=manual_inputs,
+        output_variables=output_variables,
+        manual_outputs=manual_outputs,
         mcdc_mode=args.mcdc_mode,
     )
     json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, args.output_dir)
@@ -105,14 +118,41 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def parse_input_variables(raw_variables: list[str]) -> tuple[str, ...]:
+def parse_variable_setup(raw_variables: list[str]) -> tuple[tuple[str, ...], dict[str, ManualValue]]:
     variables: list[str] = []
+    defaults: dict[str, ManualValue] = {}
     for raw in raw_variables:
         for variable in raw.replace("\n", ",").split(","):
-            name = variable.strip()
+            item = variable.strip()
+            if not item:
+                continue
+            if "=" in item:
+                name, value = item.split("=", 1)
+                name = name.strip()
+                if name:
+                    variables.append(name)
+                    defaults[name] = parse_manual_input_value(value.strip())
+                continue
+            name = item
             if name:
                 variables.append(name)
-    return tuple(dict.fromkeys(variables))
+    return tuple(dict.fromkeys(variables)), defaults
+
+
+parse_input_variables = parse_variable_setup
+
+
+def parse_manual_input_value(value: str) -> ManualValue:
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if value.lstrip("-").isdigit():
+        return int(value)
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
 
 
 if __name__ == "__main__":

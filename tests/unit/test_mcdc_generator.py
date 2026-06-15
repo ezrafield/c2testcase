@@ -68,15 +68,21 @@ def test_testcase_table_is_input_first_with_boundary_values(tmp_path: Path) -> N
     source = tmp_path / "bounds.c"
     source.write_text("int f(int a,int b){ if (a > 3 && b < 4) return 1; return 0; }")
 
-    report = generate_mcdc_report(source, input_variables=("a", "b"))
+    report = generate_mcdc_report(
+        source,
+        input_variables=("a", "b", "IN_gear", "IN_ignition"),
+        manual_inputs={"IN_gear": "D", "IN_ignition": 1},
+        output_variables=("VF24blatgfd_s", "VS15lat_grev"),
+        manual_outputs={"VF24blatgfd_s": -24.5, "VS15lat_grev": -2.5},
+    )
     rows = build_testcase_table_rows(report)
 
-    assert rows[0][:5] == ["Step", "", "", "Inputs", ""]
-    assert rows[1][:5] == ["TestCase_ID", "Step_No", "Step_Action", "a", "b"]
-    assert [row[:5] for row in rows[2:5]] == [
-        ["TC1", 1, "Set inputs a=4, b=3", 4, 3],
-        ["TC2", 2, "Set inputs a=3, b=3", 3, 3],
-        ["TC3", 3, "Set inputs a=4, b=4", 4, 4],
+    assert rows[0] == ["Mode", "Inputs", "", "", "", "Outputs", ""]
+    assert rows[1] == ["Step", "a", "b", "IN_gear", "IN_ignition", "VF24blatgfd_s", "VS15lat_grev"]
+    assert rows[2:5] == [
+        [0, 4, 3, "D", 1, -24.5, -2.5],
+        [1, 3, 3, "D", 1, -24.5, -2.5],
+        [2, 4, 4, "D", 1, -24.5, -2.5],
     ]
 
 
@@ -106,6 +112,9 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
         compile_flags=("-DUNIT_TEST",),
         target_function="f",
         input_variables=("ready", "x", "manual_input"),
+        manual_inputs={"manual_input": 99},
+        output_variables=("expected",),
+        manual_outputs={"expected": 1},
     )
     json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, tmp_path / "out")
 
@@ -116,18 +125,22 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert '"score_kind": "generated_target_score"' in json_path.read_text()
     assert '"mcdc_mode": "unique-cause"' in json_path.read_text()
     assert '"input_variables": [' in json_path.read_text()
+    assert '"manual_inputs": {' in json_path.read_text()
+    assert '"output_variables": [' in json_path.read_text()
+    assert '"manual_outputs": {' in json_path.read_text()
     assert "Generated MC/DC testcase scaffold" in harness_path.read_text()
     assert "Generated target score: 100.0%" in gap_report_path.read_text()
     assert "Confirmed LLVM MC/DC coverage ready:" in gap_report_path.read_text()
     with ZipFile(excel_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
-    assert "TestCase_ID" in sheet_xml
-    assert "Step_Action" in sheet_xml
-    assert "Decision_Result" in sheet_xml
-    assert "TC1" in sheet_xml
+    assert "Step" in sheet_xml
+    assert "Inputs" in sheet_xml
+    assert "Outputs" in sheet_xml
+    assert "expected" in sheet_xml
     assert "ready" in sheet_xml
     assert "x" in sheet_xml
     assert "manual_input" in sheet_xml
+    assert "99" in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

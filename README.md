@@ -21,15 +21,16 @@ python -m venv .c2testcases
 Generate cases:
 
 ```powershell
-c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --input-variable a,b,c --mcdc-mode masking -o build\mcdc
+c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --input-variable a,b,IN_gear=D,IN_ignition=1 --output-variable VF24blatgfd_s=-24.5,VS15lat_grev=-2.5 --mcdc-mode masking -o build\mcdc
 ```
 
-Open `build\mcdc\mcdc_testcases.xlsx` to see testcase inputs in a table. The input columns come from `--input-variable` first, followed by any simple variables inferred from the conditions:
+Open `build\mcdc\mcdc_testcases.xlsx` to see testcase vectors in a SIL-style table. Input columns come from `--input-variable`; output baseline columns come from `--output-variable`. Use `name=value` to provide manual baseline setup values; generated condition values override input defaults when inferred:
 
 ```text
-Testcase  Decision  Line  Decision Result  a  b  c
-TC1       D1        1     TRUE             1  2  3
-TC2       D1        1     FALSE            0  2  2
+Mode  Inputs        Outputs
+Step  a  b  c       VF24blatgfd_s  VS15lat_grev
+0     1  2  3       -24.5          -2.5
+1     0  2  2       -24.5          -2.5
 ```
 
 Without installation, use:

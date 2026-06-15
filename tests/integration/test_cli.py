@@ -20,7 +20,9 @@ def test_cli_generates_end_to_end_artifacts(tmp_path: Path, capsys) -> None:
             "--target-function",
             "logic",
             "--input-variable",
-            "a,b,flag,expected",
+            "a,b,flag,expected=PASS,IN_gear=D",
+            "--output-variable",
+            "VF24blatgfd_s=-24.5,VS15lat_grev=-2.5",
             "--compile-flag=-DUNIT_TEST",
             "--mcdc-mode",
             "masking",
@@ -38,3 +40,6 @@ def test_cli_generates_end_to_end_artifacts(tmp_path: Path, capsys) -> None:
     assert (output_dir / "generated_mcdc_tests.c").exists()
     assert (output_dir / "gap_report.md").exists()
     assert '"input_variables": [' in (output_dir / "mcdc_cases.json").read_text()
+    assert '"manual_inputs": {' in (output_dir / "mcdc_cases.json").read_text()
+    assert '"output_variables": [' in (output_dir / "mcdc_cases.json").read_text()
+    assert '"manual_outputs": {' in (output_dir / "mcdc_cases.json").read_text()
