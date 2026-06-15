@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZipFile
 
 from src.services.mcdc_generator import (
     extract_decisions,
@@ -88,16 +89,23 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
         compile_flags=("-DUNIT_TEST",),
         target_function="f",
     )
-    json_path, harness_path, gap_report_path = write_report_artifacts(report, tmp_path / "out")
+    json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, tmp_path / "out")
 
     assert json_path.exists()
     assert harness_path.exists()
     assert gap_report_path.exists()
+    assert excel_path.exists()
     assert '"score_kind": "generated_target_score"' in json_path.read_text()
     assert '"mcdc_mode": "unique-cause"' in json_path.read_text()
     assert "Generated MC/DC testcase scaffold" in harness_path.read_text()
     assert "Generated target score: 100.0%" in gap_report_path.read_text()
     assert "Confirmed LLVM MC/DC coverage ready:" in gap_report_path.read_text()
+    with ZipFile(excel_path) as workbook:
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+    assert "Testcase" in sheet_xml
+    assert "TC1" in sheet_xml
+    assert "ready" in sheet_xml
+    assert "x" in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

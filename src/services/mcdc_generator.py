@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
 from typing import Any
 
@@ -170,16 +172,193 @@ def generate_mcdc_report(
     )
 
 
-def write_report_artifacts(report: MCDCReport, output_dir: Path) -> tuple[Path, Path, Path]:
+def write_report_artifacts(report: MCDCReport, output_dir: Path) -> tuple[Path, Path, Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "mcdc_cases.json"
     harness_path = output_dir / "generated_mcdc_tests.c"
     gap_report_path = output_dir / "gap_report.md"
+    excel_path = output_dir / "mcdc_testcases.xlsx"
 
     json_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
     harness_path.write_text(render_c_harness(report), encoding="utf-8")
     gap_report_path.write_text(render_gap_report(report), encoding="utf-8")
-    return json_path, harness_path, gap_report_path
+    write_testcase_workbook(report, excel_path)
+    return json_path, harness_path, gap_report_path, excel_path
+
+
+def write_testcase_workbook(report: MCDCReport, output_path: Path) -> None:
+    rows = testcase_table_rows(report)
+    with ZipFile(output_path, "w", ZIP_DEFLATED) as workbook:
+        workbook.writestr("[Content_Types].xml", xlsx_content_types())
+        workbook.writestr("_rels/.rels", xlsx_root_rels())
+        workbook.writestr("xl/workbook.xml", xlsx_workbook())
+        workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
+        workbook.writestr("xl/styles.xml", xlsx_styles())
+        workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows))
+
+
+def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
+    variable_names = sorted(
+        {
+            name
+            for result in report.decisions
+            for row in result.cases
+            for name in row.assignments
+        }
+    )
+    headers: list[str | int | bool] = [
+        "Testcase",
+        "Decision",
+        "Line",
+        "Decision Result",
+        "Covers Conditions",
+        "Condition Truths",
+        *variable_names,
+        "Notes",
+    ]
+    rows: list[list[str | int | bool]] = [headers]
+    case_index = 1
+    for result in report.decisions:
+        for row in result.cases:
+            rows.append(
+                [
+                    f"TC{case_index}",
+                    result.decision.id,
+                    result.decision.line,
+                    row.decision_result,
+                    ", ".join(str(index) for index in row.covers),
+                    ", ".join(
+                        f"C{index}={value}"
+                        for index, value in enumerate(row.values)
+                    ),
+                    *(row.assignments.get(name, "") for name in variable_names),
+                    "; ".join(row.notes),
+                ]
+            )
+            case_index += 1
+    if len(rows) == 1:
+        rows.append(["No generated testcases", "", "", "", "", "", *("" for _ in variable_names), ""])
+    return rows
+
+
+def xlsx_content_types() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>
+"""
+
+
+def xlsx_root_rels() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>
+"""
+
+
+def xlsx_workbook() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Testcases" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>
+"""
+
+
+def xlsx_workbook_rels() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>
+"""
+
+
+def xlsx_styles() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+  </cellXfs>
+</styleSheet>
+"""
+
+
+def xlsx_sheet(rows: list[list[str | int | bool]]) -> str:
+    row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(rows, start=1))
+    widths = "".join(
+        f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
+        for index, width in enumerate(column_widths(rows), start=1)
+    )
+    dimension = f"A1:{column_name(len(rows[0]))}{len(rows)}"
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="{dimension}"/>
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <cols>{widths}</cols>
+  <sheetData>
+{row_xml}
+  </sheetData>
+  <autoFilter ref="{dimension}"/>
+</worksheet>
+"""
+
+
+def xlsx_row(row_index: int, row: list[str | int | bool]) -> str:
+    cells = "".join(
+        xlsx_cell(row_index, column_index, value, style=1 if row_index == 1 else 0)
+        for column_index, value in enumerate(row, start=1)
+    )
+    return f'    <row r="{row_index}">{cells}</row>'
+
+
+def xlsx_cell(row_index: int, column_index: int, value: str | int | bool, style: int = 0) -> str:
+    reference = f"{column_name(column_index)}{row_index}"
+    style_attr = f' s="{style}"' if style else ""
+    if isinstance(value, bool):
+        return f'<c r="{reference}" t="b"{style_attr}><v>{int(value)}</v></c>'
+    if isinstance(value, int):
+        return f'<c r="{reference}"{style_attr}><v>{value}</v></c>'
+    text = escape(str(value))
+    return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t>{text}</t></is></c>'
+
+
+def column_widths(rows: list[list[str | int | bool]]) -> list[int]:
+    widths: list[int] = []
+    for column in range(len(rows[0])):
+        max_length = max(len(str(row[column])) for row in rows)
+        widths.append(max(10, min(max_length + 2, 48)))
+    return widths
+
+
+def column_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
 
 
 def extract_decisions(source: str) -> tuple[Decision, ...]:

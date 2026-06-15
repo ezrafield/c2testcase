@@ -30,6 +30,8 @@ def test_cli_generates_end_to_end_artifacts(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Generated MC/DC target score (masking): 100.0%" in captured.out
+    assert "Excel cases:" in captured.out
     assert (output_dir / "mcdc_cases.json").exists()
+    assert (output_dir / "mcdc_testcases.xlsx").exists()
     assert (output_dir / "generated_mcdc_tests.c").exists()
     assert (output_dir / "gap_report.md").exists()

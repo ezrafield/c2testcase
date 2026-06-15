@@ -5,6 +5,7 @@ c2testcase is a local, CPU-friendly starter pipeline for generating best-effort 
 It currently extracts `if` and `while` decisions, splits boolean conditions, enumerates independence pairs, and emits:
 
 - `mcdc_cases.json`: decision targets, selected MC/DC rows, inferred simple inputs, and warnings.
+- `mcdc_testcases.xlsx`: testcase rows with `TC1`, `TC2`, etc. and one column per inferred input.
 - `generated_mcdc_tests.c`: a harness scaffold to adapt to the function under test.
 - `gap_report.md`: score, local tool availability, and gap classifications.
 
@@ -21,6 +22,14 @@ Generate cases:
 
 ```powershell
 c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --mcdc-mode masking -o build\mcdc
+```
+
+Open `build\mcdc\mcdc_testcases.xlsx` to see testcase inputs in a table:
+
+```text
+Testcase  Decision  Line  Decision Result  a  b  c
+TC1       D1        1     TRUE             1  2  3
+TC2       D1        1     FALSE            0  2  2
 ```
 
 Without installation, use:

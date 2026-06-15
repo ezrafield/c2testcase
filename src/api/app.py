@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -64,7 +65,7 @@ async def generate_cases(
             target_function=target_function.strip() or None,
             mcdc_mode=mcdc_mode,
         )
-        json_path, harness_path, gap_report_path = write_report_artifacts(report, output_dir)
+        json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, output_dir)
 
         return {
             "report": report.to_dict(),
@@ -72,6 +73,9 @@ async def generate_cases(
                 "mcdc_cases.json": json_path.read_text(encoding="utf-8"),
                 "generated_mcdc_tests.c": harness_path.read_text(encoding="utf-8"),
                 "gap_report.md": gap_report_path.read_text(encoding="utf-8"),
+            },
+            "downloads": {
+                "mcdc_testcases.xlsx": base64.b64encode(excel_path.read_bytes()).decode("ascii"),
             },
         }
 
@@ -172,7 +176,7 @@ def render_index_html() -> str:
     button:disabled { opacity: .62; cursor: wait; }
     .summary {
       display: grid;
-      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
@@ -227,6 +231,41 @@ def render_index_html() -> str:
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    .table-wrap {
+      display: none;
+      min-height: 420px;
+      max-height: calc(100vh - 240px);
+      overflow: auto;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 860px;
+      background: white;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #263241;
+      color: white;
+      font-size: 12px;
+      z-index: 1;
+    }
+    td.notes, td.truths {
+      white-space: normal;
+      min-width: 220px;
+    }
     .error {
       color: var(--warn);
       font-weight: 700;
@@ -245,6 +284,7 @@ def render_index_html() -> str:
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
       .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       pre { max-height: 520px; }
+      .table-wrap { max-height: 520px; }
     }
   </style>
 </head>
@@ -285,8 +325,11 @@ def render_index_html() -> str:
         <button class="tab active" type="button" data-artifact="gap_report.md">Gap report</button>
         <button class="tab" type="button" data-artifact="mcdc_cases.json">JSON</button>
         <button class="tab" type="button" data-artifact="generated_mcdc_tests.c">Harness</button>
+        <button class="tab" type="button" data-view="testcase_table">Testcase_table</button>
+        <button class="tab" type="button" data-download="mcdc_testcases.xlsx">Export Excel</button>
       </div>
       <pre id="artifact">Upload a C source file to generate cases.</pre>
+      <div id="testcase-table" class="table-wrap"></div>
     </section>
   </main>
   <script>
@@ -294,7 +337,8 @@ def render_index_html() -> str:
     const submit = document.getElementById("submit");
     const error = document.getElementById("error");
     const artifact = document.getElementById("artifact");
-    const state = { artifacts: {}, active: "gap_report.md" };
+    const testcaseTable = document.getElementById("testcase-table");
+    const state = { artifacts: {}, downloads: {}, report: null, active: "gap_report.md" };
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -307,8 +351,14 @@ def render_index_html() -> str:
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || "Generation failed");
         state.artifacts = payload.artifacts;
+        state.downloads = payload.downloads || {};
+        state.report = payload.report;
         renderSummary(payload.report);
-        renderArtifact(state.active);
+        if (state.active === "testcase_table") {
+          renderTestcaseTable();
+        } else {
+          renderArtifact(state.active);
+        }
       } catch (err) {
         error.textContent = err.message;
         artifact.textContent = "";
@@ -319,10 +369,19 @@ def render_index_html() -> str:
 
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => {
+        if (button.dataset.download) {
+          downloadArtifact(button.dataset.download);
+          return;
+        }
         document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
         button.classList.add("active");
-        state.active = button.dataset.artifact;
-        renderArtifact(state.active);
+        if (button.dataset.view === "testcase_table") {
+          state.active = "testcase_table";
+          renderTestcaseTable();
+        } else {
+          state.active = button.dataset.artifact;
+          renderArtifact(state.active);
+        }
       });
     });
 
@@ -337,7 +396,103 @@ def render_index_html() -> str:
     }
 
     function renderArtifact(name) {
+      artifact.style.display = "block";
+      testcaseTable.style.display = "none";
       artifact.textContent = state.artifacts[name] || "No artifact generated yet.";
+    }
+
+    function renderTestcaseTable() {
+      artifact.style.display = "none";
+      testcaseTable.style.display = "block";
+      testcaseTable.replaceChildren();
+      if (!state.report) {
+        testcaseTable.append(emptyNode("No generated testcases yet."));
+        return;
+      }
+      const rows = testcaseRows(state.report);
+      if (rows.length === 0) {
+        testcaseTable.append(emptyNode("No generated testcases."));
+        return;
+      }
+      const variables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
+      const headers = [
+        "Testcase",
+        "Decision",
+        "Line",
+        "Decision Result",
+        "Covers Conditions",
+        "Condition Truths",
+        ...variables,
+        "Notes",
+      ];
+      const table = document.createElement("table");
+      const thead = table.createTHead();
+      const headerRow = thead.insertRow();
+      headers.forEach((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        headerRow.append(th);
+      });
+      const tbody = table.createTBody();
+      rows.forEach((row, index) => {
+        const tr = tbody.insertRow();
+        const values = [
+          `TC${index + 1}`,
+          row.decisionId,
+          row.line,
+          row.decisionResult,
+          row.covers.join(", "),
+          row.values.map((value, valueIndex) => `C${valueIndex}=${value}`).join(", "),
+          ...variables.map((name) => row.assignments?.[name] ?? ""),
+          row.notes.join("; "),
+        ];
+        values.forEach((value, columnIndex) => {
+          const td = tr.insertCell();
+          td.textContent = String(value);
+          if (headers[columnIndex] === "Notes") td.className = "notes";
+          if (headers[columnIndex] === "Condition Truths") td.className = "truths";
+        });
+      });
+      testcaseTable.append(table);
+    }
+
+    function testcaseRows(report) {
+      return (report.decisions || []).flatMap((decision) =>
+        (decision.cases || []).map((row) => ({
+          decisionId: decision.id,
+          line: decision.line,
+          decisionResult: row.decision_result,
+          covers: row.covers || [],
+          values: row.values || [],
+          assignments: row.assignments || {},
+          notes: row.notes || [],
+        }))
+      );
+    }
+
+    function emptyNode(text) {
+      const node = document.createElement("div");
+      node.className = "empty";
+      node.textContent = text;
+      return node;
+    }
+
+    function downloadArtifact(name) {
+      const encoded = state.downloads[name];
+      if (!encoded) {
+        artifact.style.display = "block";
+        testcaseTable.style.display = "none";
+        artifact.textContent = "Generate cases before downloading Excel.";
+        return;
+      }
+      const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = name;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      artifact.textContent = `Downloaded ${name}.`;
     }
   </script>
 </body>

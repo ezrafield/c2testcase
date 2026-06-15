@@ -12,6 +12,17 @@ def test_web_app_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_web_app_exposes_table_and_excel_controls() -> None:
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Testcase_table" in response.text
+    assert "Export Excel" in response.text
+    assert "testcase-table" in response.text
+
+
 def test_web_app_generates_mcdc_artifacts() -> None:
     client = TestClient(app)
 
@@ -43,3 +54,4 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     assert "mcdc_cases.json" in payload["artifacts"]
     assert "generated_mcdc_tests.c" in payload["artifacts"]
     assert "gap_report.md" in payload["artifacts"]
+    assert "mcdc_testcases.xlsx" in payload["downloads"]

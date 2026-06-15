@@ -83,10 +83,11 @@ def main(argv: list[str] | None = None) -> int:
         target_function=args.target_function,
         mcdc_mode=args.mcdc_mode,
     )
-    json_path, harness_path, gap_report_path = write_report_artifacts(report, args.output_dir)
+    json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, args.output_dir)
 
     print(f"Generated MC/DC target score ({report.mcdc_mode}): {report.score:.1%}")
     print(f"Cases: {json_path}")
+    print(f"Excel cases: {excel_path}")
     print(f"Harness scaffold: {harness_path}")
     print(f"Gap report: {gap_report_path}")
     for warning in report.warnings:
