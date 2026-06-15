@@ -12,7 +12,8 @@ This is intentionally deterministic and dependency-light. It does not claim 100%
 
 ## Getting Started
 ```powershell
-.\.c2testcases\Scripts\python.exe -m pip install -e ".[dev]"
+python -m venv .c2testcases
+.\.c2testcases\Scripts\python.exe -m pip install -r requirements.txt
 .\.c2testcases\Scripts\python.exe -m pytest tests/unit tests/integration
 ```
 
@@ -25,13 +26,13 @@ c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-f
 Without installation, use:
 
 ```powershell
-python -m src.cli path\to\file.c -o build\mcdc
+.\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c -o build\mcdc
 ```
 
 Compiler flags that start with `-` should use the equals form:
 
 ```powershell
-python -m src.cli path\to\file.c --compile-flag=-DUNIT_TEST -o build\mcdc
+.\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c --compile-flag=-DUNIT_TEST -o build\mcdc
 ```
 
 Supported generated target modes:
