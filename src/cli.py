@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional function name to record in generated reports.",
     )
     parser.add_argument(
+        "--input-variable",
+        action="append",
+        default=[],
+        help="Input variable to include as a testcase table column. Repeat or use comma-separated names.",
+    )
+    parser.add_argument(
         "--compile-flag",
         action="append",
         default=[],
@@ -81,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         include_dirs=include_dirs,
         compile_flags=tuple(args.compile_flag),
         target_function=args.target_function,
+        input_variables=parse_input_variables(args.input_variable),
         mcdc_mode=args.mcdc_mode,
     )
     json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, args.output_dir)
@@ -96,6 +103,16 @@ def main(argv: list[str] | None = None) -> int:
         for warning in result.warnings:
             print(f"Warning {result.decision.id}: {warning}")
     return 0
+
+
+def parse_input_variables(raw_variables: list[str]) -> tuple[str, ...]:
+    variables: list[str] = []
+    for raw in raw_variables:
+        for variable in raw.replace("\n", ",").split(","):
+            name = variable.strip()
+            if name:
+                variables.append(name)
+    return tuple(dict.fromkeys(variables))
 
 
 if __name__ == "__main__":

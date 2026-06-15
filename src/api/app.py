@@ -29,6 +29,7 @@ async def generate_cases(
     source: UploadFile = File(...),
     headers: list[UploadFile] | None = File(default=None),
     target_function: str = Form(default=""),
+    input_variables: str = Form(default=""),
     compile_flags: str = Form(default=""),
     max_conditions: int = Form(default=12),
     mcdc_mode: str = Form(default="unique-cause"),
@@ -63,6 +64,7 @@ async def generate_cases(
             include_dirs=(workspace,),
             compile_flags=parse_compile_flags(compile_flags),
             target_function=target_function.strip() or None,
+            input_variables=parse_input_variables(input_variables),
             mcdc_mode=mcdc_mode,
         )
         json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, output_dir)
@@ -82,6 +84,15 @@ async def generate_cases(
 
 def parse_compile_flags(raw_flags: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw_flags.replace("\n", " ").split(" ") if part.strip())
+
+
+def parse_input_variables(raw_variables: str) -> tuple[str, ...]:
+    variables = [
+        part.strip()
+        for part in raw_variables.replace("\n", ",").split(",")
+        if part.strip()
+    ]
+    return tuple(dict.fromkeys(variables))
 
 
 def safe_name(filename: str) -> str:
@@ -299,6 +310,8 @@ def render_index_html() -> str:
         <input id="headers" name="headers" type="file" accept=".h" multiple>
         <label for="target_function">Target function</label>
         <input id="target_function" name="target_function" type="text" placeholder="logic">
+        <label for="input_variables">Input variables</label>
+        <input id="input_variables" name="input_variables" type="text" placeholder="a, b, c">
         <label for="compile_flags">Compile flags</label>
         <textarea id="compile_flags" name="compile_flags" placeholder="-DUNIT_TEST"></textarea>
         <label for="max_conditions">Max conditions</label>
@@ -414,7 +427,8 @@ def render_index_html() -> str:
         testcaseTable.append(emptyNode("No generated testcases."));
         return;
       }
-      const variables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
+      const inferredVariables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
+      const variables = [...new Set([...(state.report.input_variables || []), ...inferredVariables])];
       const headers = [
         "Testcase",
         "Decision",

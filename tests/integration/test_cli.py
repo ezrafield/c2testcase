@@ -19,6 +19,8 @@ def test_cli_generates_end_to_end_artifacts(tmp_path: Path, capsys) -> None:
             str(tmp_path),
             "--target-function",
             "logic",
+            "--input-variable",
+            "a,b,flag,expected",
             "--compile-flag=-DUNIT_TEST",
             "--mcdc-mode",
             "masking",
@@ -35,3 +37,4 @@ def test_cli_generates_end_to_end_artifacts(tmp_path: Path, capsys) -> None:
     assert (output_dir / "mcdc_testcases.xlsx").exists()
     assert (output_dir / "generated_mcdc_tests.c").exists()
     assert (output_dir / "gap_report.md").exists()
+    assert '"input_variables": [' in (output_dir / "mcdc_cases.json").read_text()

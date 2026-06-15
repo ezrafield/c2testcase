@@ -67,6 +67,7 @@ class DecisionResult:
 class MCDCReport:
     source: str
     decisions: tuple[DecisionResult, ...]
+    input_variables: tuple[str, ...] = field(default_factory=tuple)
     headers: tuple[str, ...] = field(default_factory=tuple)
     include_dirs: tuple[str, ...] = field(default_factory=tuple)
     compile_flags: tuple[str, ...] = field(default_factory=tuple)
@@ -91,6 +92,7 @@ class MCDCReport:
             "score_kind": "generated_target_score",
             "mcdc_mode": self.mcdc_mode,
             "target_function": self.target_function,
+            "input_variables": list(self.input_variables),
             "headers": list(self.headers),
             "include_dirs": list(self.include_dirs),
             "compile_flags": list(self.compile_flags),
@@ -140,6 +142,7 @@ def generate_mcdc_report(
     include_dirs: tuple[Path, ...] = (),
     compile_flags: tuple[str, ...] = (),
     target_function: str | None = None,
+    input_variables: tuple[str, ...] = (),
     mcdc_mode: str = "unique-cause",
 ) -> MCDCReport:
     if mcdc_mode not in MCDC_MODES:
@@ -159,6 +162,7 @@ def generate_mcdc_report(
     return MCDCReport(
         source=str(source_path),
         decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode) for decision in decisions),
+        input_variables=tuple(dict.fromkeys(input_variables)),
         headers=tuple(str(path) for path in headers),
         include_dirs=tuple(str(path) for path in include_dirs),
         compile_flags=compile_flags,
@@ -198,7 +202,7 @@ def write_testcase_workbook(report: MCDCReport, output_path: Path) -> None:
 
 
 def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
-    variable_names = sorted(
+    inferred_variable_names = sorted(
         {
             name
             for result in report.decisions
@@ -206,6 +210,7 @@ def testcase_table_rows(report: MCDCReport) -> list[list[str | int | bool]]:
             for name in row.assignments
         }
     )
+    variable_names = list(dict.fromkeys((*report.input_variables, *inferred_variable_names)))
     headers: list[str | int | bool] = [
         "Testcase",
         "Decision",

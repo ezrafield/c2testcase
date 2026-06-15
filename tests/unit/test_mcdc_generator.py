@@ -88,6 +88,7 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
         include_dirs=(tmp_path,),
         compile_flags=("-DUNIT_TEST",),
         target_function="f",
+        input_variables=("ready", "x", "manual_input"),
     )
     json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, tmp_path / "out")
 
@@ -97,6 +98,7 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert excel_path.exists()
     assert '"score_kind": "generated_target_score"' in json_path.read_text()
     assert '"mcdc_mode": "unique-cause"' in json_path.read_text()
+    assert '"input_variables": [' in json_path.read_text()
     assert "Generated MC/DC testcase scaffold" in harness_path.read_text()
     assert "Generated target score: 100.0%" in gap_report_path.read_text()
     assert "Confirmed LLVM MC/DC coverage ready:" in gap_report_path.read_text()
@@ -106,6 +108,7 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "TC1" in sheet_xml
     assert "ready" in sheet_xml
     assert "x" in sheet_xml
+    assert "manual_input" in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

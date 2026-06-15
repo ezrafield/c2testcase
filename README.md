@@ -21,10 +21,10 @@ python -m venv .c2testcases
 Generate cases:
 
 ```powershell
-c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --mcdc-mode masking -o build\mcdc
+c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --input-variable a,b,c --mcdc-mode masking -o build\mcdc
 ```
 
-Open `build\mcdc\mcdc_testcases.xlsx` to see testcase inputs in a table:
+Open `build\mcdc\mcdc_testcases.xlsx` to see testcase inputs in a table. The input columns come from `--input-variable` first, followed by any simple variables inferred from the conditions:
 
 ```text
 Testcase  Decision  Line  Decision Result  a  b  c
