@@ -77,13 +77,31 @@ def test_testcase_table_is_input_first_with_boundary_values(tmp_path: Path) -> N
     )
     rows = build_testcase_table_rows(report)
 
-    assert rows[0] == ["Mode", "Inputs", "", "", "", "Outputs", ""]
+    assert rows[0] == ["Mode", "Inputs", "Inputs", "Inputs", "Inputs", "Outputs", "Outputs"]
     assert rows[1] == ["Step", "a", "b", "IN_gear", "IN_ignition", "VF24blatgfd_s", "VS15lat_grev"]
     assert rows[2:5] == [
         [0, 4, 3, "D", 1, -24.5, -2.5],
         [1, 3, 3, "D", 1, -24.5, -2.5],
         [2, 4, 4, "D", 1, -24.5, -2.5],
     ]
+    assert all(cell != "" for row in rows for cell in row)
+
+
+def test_testcase_table_fills_missing_manual_values(tmp_path: Path) -> None:
+    source = tmp_path / "bounds.c"
+    source.write_text("int f(int a,int b){ if (a > 3 && b < 4) return 1; return 0; }")
+
+    report = generate_mcdc_report(
+        source,
+        input_variables=("a", "b", "not_in_condition"),
+        output_variables=("expected_signal",),
+    )
+    rows = build_testcase_table_rows(report)
+
+    assert rows[1] == ["Step", "a", "b", "not_in_condition", "expected_signal"]
+    assert [row[3] for row in rows[2:]] == ["MANUAL", "MANUAL", "MANUAL"]
+    assert [row[4] for row in rows[2:]] == ["MANUAL", "MANUAL", "MANUAL"]
+    assert all(cell != "" for row in rows for cell in row)
 
 
 def test_direct_generation_handles_large_uniform_and_chain(tmp_path: Path) -> None:
@@ -141,6 +159,7 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "x" in sheet_xml
     assert "manual_input" in sheet_xml
     assert "99" in sheet_xml
+    assert "<mergeCells" not in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

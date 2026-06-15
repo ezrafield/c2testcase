@@ -476,13 +476,9 @@ def render_index_html() -> str:
       const table = document.createElement("table");
       const thead = table.createTHead();
       const groupRow = thead.insertRow();
-      const groups = [["Mode", 1]];
-      if (variables.length) groups.push(["Inputs", variables.length]);
-      if (outputVariables.length) groups.push(["Outputs", outputVariables.length]);
-      groups.forEach(([label, span]) => {
+      ["Mode", ...variables.map(() => "Inputs"), ...outputVariables.map(() => "Outputs")].forEach((label) => {
         const th = document.createElement("th");
         th.textContent = label;
-        th.colSpan = span;
         groupRow.append(th);
       });
       const headerRow = thead.insertRow();
@@ -494,9 +490,9 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
-        const assignments = variables.map((name) => row.assignments?.[name] ?? state.report.manual_inputs?.[name] ?? "");
+        const assignments = variables.map((name) => row.assignments?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL");
         const outputs = outputVariables.map((name) =>
-          name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? ""
+          name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL"
         );
         const values = [
           index,

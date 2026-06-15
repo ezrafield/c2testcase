@@ -227,8 +227,8 @@ def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     output_names = list(report.output_variables) or ["Decision_Result"]
     group_headers: list[TableValue] = [
         "Mode",
-        *(["Inputs"] + [""] * (len(variable_names) - 1) if variable_names else []),
-        *(["Outputs"] + [""] * (len(output_names) - 1) if output_names else []),
+        *(["Inputs"] * len(variable_names)),
+        *(["Outputs"] * len(output_names)),
     ]
     column_headers: list[TableValue] = [
         "Step",
@@ -239,9 +239,12 @@ def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     step_index = 0
     for result in report.decisions:
         for row in sorted(result.cases, key=lambda case: testcase_sort_key(case, variable_names)):
-            assignments = [row.assignments.get(name, report.manual_inputs.get(name, "")) for name in variable_names]
+            assignments = [
+                row.assignments.get(name, report.manual_inputs.get(name, "MANUAL"))
+                for name in variable_names
+            ]
             outputs = [
-                row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "")
+                row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "MANUAL")
                 for name in output_names
             ]
             rows.append(
@@ -253,7 +256,7 @@ def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
             )
             step_index += 1
     if len(rows) == 2:
-        rows.append(["No generated testcases", *("" for _ in variable_names), *("" for _ in output_names)])
+        rows.append(["No generated testcases", *(["MANUAL"] * len(variable_names)), *(["MANUAL"] * len(output_names))])
     return rows
 
 
@@ -333,7 +336,6 @@ def xlsx_sheet(rows: list[list[TableValue]]) -> str:
     )
     dimension = f"A1:{column_name(len(rows[0]))}{len(rows)}"
     filter_dimension = f"A2:{column_name(len(rows[0]))}{len(rows)}"
-    merge_cells = xlsx_merge_cells(rows)
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="{dimension}"/>
@@ -346,7 +348,6 @@ def xlsx_sheet(rows: list[list[TableValue]]) -> str:
   <sheetData>
 {row_xml}
   </sheetData>
-  {merge_cells}
   <autoFilter ref="{filter_dimension}"/>
 </worksheet>
 """
@@ -358,27 +359,6 @@ def xlsx_row(row_index: int, row: list[TableValue]) -> str:
         for column_index, value in enumerate(row, start=1)
     )
     return f'    <row r="{row_index}">{cells}</row>'
-
-
-def xlsx_merge_cells(rows: list[list[TableValue]]) -> str:
-    if not rows:
-        return ""
-    merge_ranges: list[str] = []
-    start_column = 1
-    current_label = str(rows[0][0])
-    for column_index, value in enumerate(rows[0][1:], start=2):
-        label = str(value)
-        if label:
-            if column_index - start_column > 1:
-                merge_ranges.append(f"{column_name(start_column)}1:{column_name(column_index - 1)}1")
-            start_column = column_index
-            current_label = label
-    if len(rows[0]) - start_column >= 1 and current_label:
-        merge_ranges.append(f"{column_name(start_column)}1:{column_name(len(rows[0]))}1")
-    if not merge_ranges:
-        return ""
-    merge_xml = "".join(f'<mergeCell ref="{cell_range}"/>' for cell_range in merge_ranges)
-    return f'<mergeCells count="{len(merge_ranges)}">{merge_xml}</mergeCells>'
 
 
 def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
