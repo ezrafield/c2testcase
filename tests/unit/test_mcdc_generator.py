@@ -2,6 +2,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from src.services.mcdc_generator import (
+    ExcelExportMetadata,
     extract_decisions,
     extract_function_parameters,
     find_tool_path,
@@ -160,6 +161,65 @@ def test_report_returns_structured_testcase_table_from_c_inputs(tmp_path: Path) 
         assert row["covers"]
 
 
+def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
+    fixture_dir = Path("tests/fixtures/c")
+    source = fixture_dir / "io-canii03ad5d24cnv-osm-cskn-1 1.c"
+    header = fixture_dir / "io-canii03ad5d24cnv-osm-cskn-1.h"
+    template = fixture_dir / "result_template.md"
+
+    report = generate_mcdc_report(
+        source,
+        headers=(header,),
+        target_function="J_canrv_03ad5d24_cnvt",
+    )
+    rows = build_testcase_table_rows(report)
+
+    expected_rows = [
+        [cell for cell in line.split("\t") if cell != ""]
+        for line in template.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    actual_rows = [[format_table_cell(cell) for cell in row] for row in rows]
+
+    assert actual_rows[:2] == expected_rows[:2]
+    assert len(actual_rows) > len(expected_rows)
+    assert report.score == 1.0
+    assert [result.decision.line for result in report.decisions] == [174, 186, 201, 216]
+
+    table = report.to_dict()["testcase_table"]
+    assert table["mcdc_complete"] is True
+    assert table["input_columns"] == expected_rows[1][1:10]
+    assert table["output_columns"] == expected_rows[1][10:]
+    assert table["input_columns"][0] == "f_canrxok"
+    assert table["input_columns"][1:] == [
+        "VU16srs_lat_g_fd_imrx",
+        "VU16srs_lat_g_fdrx",
+        "VU16srs_lon_g_fd_imrx",
+        "VU16srs_lon_g_fdrx",
+        "VU16srs_pitch_fdrx",
+        "VU16srs_roll_fdrx",
+        "VU16srs_ver_g_fdrx",
+        "VU16srs_yaw_fd_imrx",
+    ]
+    assert {row["decision_id"] for row in table["rows"]} == {"D1", "D2", "D3", "D4"}
+    input_rows = [row["inputs"] for row in table["rows"]]
+    assert any(row["f_canrxok"] == 0 for row in input_rows)
+    assert any(row["VU16srs_pitch_fdrx"] == 65535 for row in input_rows)
+    assert any(row["VU16srs_roll_fdrx"] == 65535 for row in input_rows)
+    assert any(row["VU16srs_yaw_fd_imrx"] == 65535 for row in input_rows)
+    assert any(row["outputs"]["VF24bpitchfd_s"] == 124.996 for row in table["rows"])
+    assert any(row["outputs"]["VF24brollfd_s"] == 124.996 for row in table["rows"])
+    assert any(row["outputs"]["VF24byawfd_s"] == 124.996 for row in table["rows"])
+
+
+def format_table_cell(value: object) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def test_direct_generation_handles_large_uniform_and_chain(tmp_path: Path) -> None:
     source = tmp_path / "large.c"
     parameters = ",".join(f"int v{index}" for index in range(13))
@@ -215,7 +275,41 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "x" in sheet_xml
     assert "manual_input" in sheet_xml
     assert "99" in sheet_xml
-    assert "<mergeCells" not in sheet_xml
+    assert "Format Version" in sheet_xml
+    assert "Comment" in sheet_xml
+    assert "<mergeCells" in sheet_xml
+
+
+def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> None:
+    source = tmp_path / "sample.c"
+    source.write_text("int f(int ready,int x){ if (ready && x > 2) return 1; return 0; }")
+
+    report = generate_mcdc_report(
+        source,
+        target_function="f",
+        output_variables=("expected",),
+        manual_outputs={"expected": 1},
+    )
+    metadata = ExcelExportMetadata(
+        format_version="1.3",
+        architecture="Example Architecture [C-Code]",
+        scope="sample.c:1:f",
+        name="SIL_SV_ATG_1",
+    )
+    _, _, _, excel_path = write_report_artifacts(report, tmp_path / "out", excel_metadata=metadata)
+
+    assert excel_path.name == "SIL_SV_ATG_1.xlsx"
+    with ZipFile(excel_path) as workbook:
+        workbook_xml = workbook.read("xl/workbook.xml").decode()
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+    assert 'name="SIL_SV_ATG_1"' in workbook_xml
+    assert "Format Version" in sheet_xml
+    assert "Example Architecture [C-Code]" in sheet_xml
+    assert "sample.c:1:f" in sheet_xml
+    assert "SIL_SV_ATG_1" in sheet_xml
+    assert "Comment" in sheet_xml
+    assert "<mergeCells" in sheet_xml
+    assert 'topLeftCell="A7"' in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

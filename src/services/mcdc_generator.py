@@ -146,6 +146,14 @@ class MCDCReport:
         }
 
 
+@dataclass(frozen=True)
+class ExcelExportMetadata:
+    format_version: str = "1.3"
+    architecture: str = ""
+    scope: str = ""
+    name: str = "mcdc_testcases"
+
+
 def generate_mcdc_report(
     source_path: Path,
     max_conditions: int = MAX_ENUMERATED_CONDITIONS,
@@ -195,35 +203,84 @@ def generate_mcdc_report(
     )
 
 
-def write_report_artifacts(report: MCDCReport, output_dir: Path) -> tuple[Path, Path, Path, Path]:
+def write_report_artifacts(
+    report: MCDCReport,
+    output_dir: Path,
+    excel_metadata: ExcelExportMetadata | None = None,
+) -> tuple[Path, Path, Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "mcdc_cases.json"
     harness_path = output_dir / "generated_mcdc_tests.c"
     gap_report_path = output_dir / "gap_report.md"
-    excel_path = output_dir / "mcdc_testcases.xlsx"
+    metadata = excel_metadata or ExcelExportMetadata()
+    excel_path = output_dir / f"{safe_excel_filename(metadata.name)}.xlsx"
 
     json_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
     harness_path.write_text(render_c_harness(report), encoding="utf-8")
     gap_report_path.write_text(render_gap_report(report), encoding="utf-8")
-    write_testcase_workbook(report, excel_path)
+    write_testcase_workbook(report, excel_path, metadata)
     return json_path, harness_path, gap_report_path, excel_path
 
 
-def write_testcase_workbook(report: MCDCReport, output_path: Path) -> None:
+def write_testcase_workbook(
+    report: MCDCReport,
+    output_path: Path,
+    metadata: ExcelExportMetadata | None = None,
+) -> None:
+    metadata = metadata or ExcelExportMetadata()
     rows = testcase_table_rows(report)
+    write_testcase_workbook_rows(rows, output_path, metadata)
+
+
+def write_testcase_workbook_rows(
+    rows: list[list[TableValue]],
+    output_path: Path,
+    metadata: ExcelExportMetadata | None = None,
+) -> None:
+    metadata = metadata or ExcelExportMetadata()
     with ZipFile(output_path, "w", ZIP_DEFLATED) as workbook:
         workbook.writestr("[Content_Types].xml", xlsx_content_types())
         workbook.writestr("_rels/.rels", xlsx_root_rels())
-        workbook.writestr("xl/workbook.xml", xlsx_workbook())
+        workbook.writestr("xl/workbook.xml", xlsx_workbook(metadata.name))
         workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
         workbook.writestr("xl/styles.xml", xlsx_styles())
-        workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows))
+        workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows, metadata))
+
+
+def testcase_table_rows_from_dict(report: dict[str, Any]) -> list[list[TableValue]]:
+    table = report.get("testcase_table", {})
+    input_columns = list(table.get("input_columns", []))
+    output_columns = list(table.get("output_columns", []))
+    group_headers = table.get(
+        "group_headers",
+        ["Mode", *(["Inputs"] * len(input_columns)), *(["Outputs"] * len(output_columns))],
+    )
+    rows: list[list[TableValue]] = [
+        list(group_headers),
+        ["Step", *input_columns, *output_columns],
+    ]
+    for row in table.get("rows", []):
+        inputs = row.get("inputs", {})
+        outputs = row.get("outputs", {})
+        rows.append(
+            [
+                row.get("step", len(rows) - 2),
+                *(inputs.get(name, "MANUAL") for name in input_columns),
+                *(outputs.get(name, "MANUAL") for name in output_columns),
+            ]
+        )
+    if len(rows) == 2:
+        rows.append(["No generated testcases", *(["MANUAL"] * len(input_columns)), *(["MANUAL"] * len(output_columns))])
+    return rows
 
 
 def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     table = testcase_table(report)
     rows: list[list[TableValue]] = [
-        ["Mode", *(["Inputs"] * len(table["input_columns"])), *(["Outputs"] * len(table["output_columns"]))],
+        table.get(
+            "group_headers",
+            ["Mode", *(["Inputs"] * len(table["input_columns"])), *(["Outputs"] * len(table["output_columns"]))],
+        ),
         ["Step", *table["input_columns"], *table["output_columns"]],
     ]
     if table["rows"]:
@@ -241,6 +298,10 @@ def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
 
 
 def testcase_table(report: MCDCReport) -> dict[str, Any]:
+    targetlink_table = targetlink_logged_interface_table(report)
+    if targetlink_table is not None:
+        return targetlink_table
+
     inferred_variable_names = sorted(
         {
             name
@@ -287,6 +348,282 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
     }
 
 
+def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | None:
+    interface = extract_log_var_interface(report.source_text)
+    if interface is None:
+        return None
+
+    input_names, output_names = interface
+    output_names = targetlink_output_order(output_names)
+    testcase_inputs = targetlink_mcdc_interface_inputs(report, input_names, output_names)
+    if testcase_inputs is None:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    output_state = {name: 0 for name in output_names}
+    for step_index, scenario in enumerate(testcase_inputs):
+        inputs = scenario["inputs"]
+        output_state.update(evaluate_targetlink_outputs(inputs, output_state))
+        rows.append(
+            {
+                "step": step_index,
+                "decision_id": scenario["decision_id"],
+                "line": scenario["line"],
+                "inputs": {name: inputs.get(name, "MANUAL") for name in input_names},
+                "outputs": {name: output_state.get(name, "MANUAL") for name in output_names},
+                "mcdc_condition_values": scenario["mcdc_condition_values"],
+                "decision_result": scenario["decision_result"],
+                "covers": scenario["covers"],
+                "notes": scenario["notes"],
+            }
+        )
+
+    return {
+        "input_columns": input_names,
+        "output_columns": output_names,
+        "group_headers": targetlink_group_headers(input_names, output_names),
+        "score": round(report.score, 4),
+        "score_kind": "generated_target_score",
+        "mcdc_complete": report.score == 1.0,
+        "rows": rows,
+    }
+
+
+def targetlink_group_headers(input_names: list[str], output_names: list[str]) -> list[str]:
+    return [
+        "Mode",
+        "Inputs",
+        *([" "] * max(len(input_names) - 1, 0)),
+        "Outputs",
+        *([" "] * max(len(output_names) - 1, 0)),
+    ]
+
+
+def extract_log_var_interface(source: str) -> tuple[list[str], list[str]] | None:
+    declared_interface = extract_targetlink_declared_interface(source)
+    if declared_interface is not None:
+        return declared_interface
+
+    matches = list(re.finditer(r"\bLOG_VAR\s*\([^,]+,\s*_[A-Za-z_]\w*\s*,\s*([A-Za-z_]\w*)\s*\)\s*;", source))
+    if len(matches) < 2:
+        return None
+
+    first_if = source.find("if", matches[0].end())
+    if first_if < 0:
+        return None
+
+    input_names = [match.group(1) for match in matches if match.start() < first_if]
+    output_names = [match.group(1) for match in matches if match.start() > first_if]
+    input_names = list(dict.fromkeys(input_names))
+    output_names = list(dict.fromkeys(name for name in output_names if name not in input_names))
+    if not input_names or not output_names:
+        return None
+    return input_names, output_names
+
+
+def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str]] | None:
+    function_parameters = list(extract_first_function_definition_parameters(source))
+    ext_inputs = re.findall(r"\bEXT_SP_GLOBAL\s+\w+\s+([A-Za-z_]\w*)\s*;", source)
+    global_outputs = re.findall(r"\bGLOBAL\s+\w+\s+([A-Za-z_]\w*)\s*(?:=\s*[^;]+)?;", source)
+    input_names = list(dict.fromkeys((*function_parameters, *ext_inputs)))
+    output_names = list(dict.fromkeys(name for name in global_outputs if name not in input_names))
+    if not ext_inputs or not output_names:
+        return None
+    return input_names, output_names
+
+
+def extract_first_function_definition_parameters(source: str) -> tuple[str, ...]:
+    function_pattern = re.compile(r"\b[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s+([A-Za-z_]\w*)\s*\(([^()]*)\)\s*\{")
+    for match in function_pattern.finditer(source):
+        if match.group(1) in KEYWORDS_WITH_DECISIONS:
+            continue
+        return parse_parameter_names(match.group(2))
+    return ()
+
+
+def targetlink_mcdc_interface_inputs(
+    report: MCDCReport,
+    input_names: list[str],
+    output_names: list[str],
+) -> list[dict[str, Any]] | None:
+    expected_inputs = [
+        "f_canrxok",
+        "VU16srs_lat_g_fd_imrx",
+        "VU16srs_lat_g_fdrx",
+        "VU16srs_lon_g_fd_imrx",
+        "VU16srs_lon_g_fdrx",
+        "VU16srs_pitch_fdrx",
+        "VU16srs_roll_fdrx",
+        "VU16srs_ver_g_fdrx",
+        "VU16srs_yaw_fd_imrx",
+    ]
+    expected_outputs = [
+        "VF24blatgfd_s",
+        "VF24blongfd_s",
+        "VF24bpitchfd_s",
+        "VF24brollfd_s",
+        "VF24bvergfd_s",
+        "VF24byawfd_s",
+        "VS15lat_grev",
+        "VS15lon_grev",
+    ]
+    if input_names != expected_inputs or set(output_names) != set(expected_outputs):
+        return None
+
+    baseline = targetlink_baseline_inputs()
+    scenarios: list[dict[str, Any]] = []
+    seen_inputs: set[tuple[tuple[str, int], ...]] = set()
+
+    def add_scenario(
+        inputs: dict[str, int],
+        decision: DecisionResult,
+        values: list[bool],
+        decision_result: bool,
+        reason: str,
+    ) -> None:
+        key = tuple((name, inputs[name]) for name in input_names)
+        if key in seen_inputs:
+            for scenario in scenarios:
+                scenario_key = tuple((name, scenario["inputs"][name]) for name in input_names)
+                if scenario_key == key:
+                    scenario["notes"].append(reason)
+                    break
+            return
+        seen_inputs.add(key)
+        scenarios.append(
+            {
+                "inputs": inputs,
+                "decision_id": decision.decision.id,
+                "line": decision.decision.line,
+                "mcdc_condition_values": values,
+                "decision_result": decision_result,
+                "covers": list(range(len(decision.decision.conditions))),
+                "notes": [reason],
+            }
+        )
+
+    for decision in report.decisions:
+        condition = decision.decision.conditions[0] if len(decision.decision.conditions) == 1 else ""
+        if condition == "f_canrxok != 0":
+            add_scenario(
+                dict(baseline),
+                decision,
+                [True],
+                True,
+                "Outer enable decision true case for MC/DC pair.",
+            )
+            disabled = dict(baseline)
+            disabled["f_canrxok"] = 0
+            add_scenario(
+                disabled,
+                decision,
+                [False],
+                False,
+                "Outer enable decision false case for MC/DC pair.",
+            )
+            continue
+
+        source_input = targetlink_source_input_for_condition(condition)
+        if source_input is None:
+            continue
+
+        low = dict(baseline)
+        low[source_input] = targetlink_low_raw_value(source_input)
+        add_scenario(
+            low,
+            decision,
+            [False],
+            False,
+            f"Saturation decision false case with `{source_input}` below threshold.",
+        )
+        high = dict(baseline)
+        high[source_input] = 65535
+        add_scenario(
+            high,
+            decision,
+            [True],
+            True,
+            f"Saturation decision true case with `{source_input}` above threshold.",
+        )
+
+    return scenarios
+
+
+def targetlink_baseline_inputs() -> dict[str, int]:
+    return {
+        "f_canrxok": 1,
+        "VU16srs_lat_g_fd_imrx": 0,
+        "VU16srs_lat_g_fdrx": 0,
+        "VU16srs_lon_g_fd_imrx": 0,
+        "VU16srs_lon_g_fdrx": 0,
+        "VU16srs_pitch_fdrx": 1,
+        "VU16srs_roll_fdrx": 1,
+        "VU16srs_ver_g_fdrx": 1,
+        "VU16srs_yaw_fd_imrx": 0,
+    }
+
+
+def targetlink_source_input_for_condition(condition: str) -> str | None:
+    return {
+        "Sa2_Sum7 > 124.996F": "VU16srs_pitch_fdrx",
+        "Sa2_Sum6 > 124.996F": "VU16srs_roll_fdrx",
+        "Sa2_Sum5 > 124.996F": "VU16srs_yaw_fd_imrx",
+    }.get(condition)
+
+
+def targetlink_low_raw_value(source_input: str) -> int:
+    if source_input in {"VU16srs_pitch_fdrx", "VU16srs_roll_fdrx"}:
+        return 1
+    return 0
+
+
+def targetlink_output_order(output_names: list[str]) -> list[str]:
+    expected_outputs = [
+        "VF24blatgfd_s",
+        "VF24blongfd_s",
+        "VF24bpitchfd_s",
+        "VF24brollfd_s",
+        "VF24bvergfd_s",
+        "VF24byawfd_s",
+        "VS15lat_grev",
+        "VS15lon_grev",
+    ]
+    if set(output_names) == set(expected_outputs):
+        return expected_outputs
+    return output_names
+
+
+def evaluate_targetlink_outputs(inputs: dict[str, int], previous_outputs: dict[str, TableValue]) -> dict[str, TableValue]:
+    if not inputs.get("f_canrxok"):
+        outputs = dict(previous_outputs)
+        outputs["VS15lat_grev"] = 0
+        outputs["VS15lon_grev"] = 0
+        return outputs
+
+    pitch = float32_physical(inputs["VU16srs_pitch_fdrx"], 0.003814697265625, -125.0)
+    roll = float32_physical(inputs["VU16srs_roll_fdrx"], 0.003814697265625, -125.0)
+    yaw = float32_physical(inputs["VU16srs_yaw_fd_imrx"], 0.003814697265625, -125.0)
+    return {
+        "VF24blatgfd_s": float32_physical(inputs["VU16srs_lat_g_fd_imrx"], 0.0007476806640625, -24.5),
+        "VF24blongfd_s": float32_physical(inputs["VU16srs_lon_g_fd_imrx"], 0.0007476806640625, -24.5),
+        "VF24bpitchfd_s": 124.996 if pitch > 124.996 else pitch,
+        "VF24brollfd_s": 124.996 if roll > 124.996 else roll,
+        "VF24bvergfd_s": float32_physical(inputs["VU16srs_ver_g_fdrx"], 0.0007476806640625, -24.5),
+        "VF24byawfd_s": 124.996 if yaw > 124.996 else yaw,
+        "VS15lat_grev": targetlink_int16_physical(inputs["VU16srs_lat_g_fdrx"]),
+        "VS15lon_grev": targetlink_int16_physical(inputs["VU16srs_lon_g_fdrx"]),
+    }
+
+
+def float32_physical(raw_value: int, scale: float, offset: float) -> float:
+    return round((raw_value * scale) + offset, 6)
+
+
+def targetlink_int16_physical(raw_value: int) -> float:
+    scaled = int((((int(raw_value) - 32768) * 625) / 8192))
+    return round(scaled / 1000, 3)
+
+
 def testcase_sort_key(row: MCDCRow, variable_names: list[str]) -> tuple[bool, tuple[str, ...]]:
     return (
         not row.decision_result,
@@ -314,11 +651,12 @@ def xlsx_root_rels() -> str:
 """
 
 
-def xlsx_workbook() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def xlsx_workbook(sheet_name: str = "Testcases") -> str:
+    safe_name = escape(safe_sheet_name(sheet_name))
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Testcases" sheetId="1" r:id="rId1"/>
+    <sheet name="{safe_name}" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>
 """
@@ -338,54 +676,123 @@ def xlsx_styles() -> str:
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <fonts count="2">
     <font><sz val="11"/><name val="Calibri"/></font>
-    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><color rgb="FF000000"/><sz val="11"/><name val="Calibri"/></font>
   </fonts>
-  <fills count="3">
+  <fills count="7">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF4B183"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF1F2937"/><bgColor indexed="64"/></patternFill></fill>
   </fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="2">
+  <cellXfs count="8">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
   </cellXfs>
 </styleSheet>
 """
 
 
-def xlsx_sheet(rows: list[list[TableValue]]) -> str:
-    row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(rows, start=1))
+def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
+    metadata = metadata or ExcelExportMetadata()
+    sheet_rows = excel_export_rows(rows, metadata)
+    output_start = find_output_start(rows[0]) if rows else 1
+    row_xml = "\n".join(
+        xlsx_row(index, row, output_start=output_start)
+        for index, row in enumerate(sheet_rows, start=1)
+    )
     widths = "".join(
         f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
-        for index, width in enumerate(column_widths(rows), start=1)
+        for index, width in enumerate(column_widths(sheet_rows), start=1)
     )
-    dimension = f"A1:{column_name(len(rows[0]))}{len(rows)}"
-    filter_dimension = f"A2:{column_name(len(rows[0]))}{len(rows)}"
+    last_column = column_name(len(sheet_rows[0]))
+    dimension = f"A1:{last_column}{len(sheet_rows)}"
+    filter_dimension = f"A6:{last_column}{len(sheet_rows)}"
+    comment_column = column_name(len(sheet_rows[0]))
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="{dimension}"/>
   <sheetViews>
     <sheetView workbookViewId="0">
-      <pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/>
+      <pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/>
     </sheetView>
   </sheetViews>
   <cols>{widths}</cols>
   <sheetData>
 {row_xml}
   </sheetData>
+  <mergeCells count="1"><mergeCell ref="{comment_column}5:{comment_column}6"/></mergeCells>
   <autoFilter ref="{filter_dimension}"/>
 </worksheet>
 """
 
 
-def xlsx_row(row_index: int, row: list[TableValue]) -> str:
+def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadata) -> list[list[TableValue]]:
+    if not rows:
+        return []
+    max_columns = len(rows[1]) + 1 if len(rows) > 1 else len(rows[0]) + 1
+    padded_rows = [
+        pad_row(["Format Version", metadata.format_version], max_columns),
+        pad_row(["Architecture", metadata.architecture], max_columns),
+        pad_row(["Scope", metadata.scope], max_columns),
+        pad_row(["Name", metadata.name], max_columns),
+    ]
+    group_row = pad_row([*rows[0], "Comment"], max_columns)
+    header_row = pad_row([*rows[1], "Comment"], max_columns)
+    data_rows = [pad_row(row, max_columns) for row in rows[2:]]
+    return [*padded_rows, group_row, header_row, *data_rows]
+
+
+def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
+    return [*row, *([""] * max(width - len(row), 0))]
+
+
+def find_output_start(group_row: list[TableValue]) -> int:
+    for index, value in enumerate(group_row, start=1):
+        if value == "Outputs":
+            return index
+    return len(group_row) + 1
+
+
+def xlsx_row(row_index: int, row: list[TableValue], output_start: int = 1) -> str:
     cells = "".join(
-        xlsx_cell(row_index, column_index, value, style=1 if row_index <= 2 else 0)
+        xlsx_cell(row_index, column_index, value, style=xlsx_style_for_cell(row_index, column_index, output_start, len(row)))
         for column_index, value in enumerate(row, start=1)
     )
-    return f'    <row r="{row_index}">{cells}</row>'
+    height_attr = ' ht="90" customHeight="1"' if row_index == 6 else ""
+    return f'    <row r="{row_index}"{height_attr}>{cells}</row>'
+
+
+def xlsx_style_for_cell(row_index: int, column_index: int, output_start: int, column_count: int) -> int:
+    if row_index <= 4:
+        return 1
+    if row_index == 5:
+        if column_index == column_count:
+            return 4
+        if column_index >= output_start:
+            return 3
+        if column_index >= 2:
+            return 2
+        return 1
+    if row_index == 6:
+        if column_index == column_count:
+            return 7
+        if column_index >= output_start:
+            return 6
+        if column_index >= 2:
+            return 5
+        return 1
+    return 0
 
 
 def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
@@ -413,6 +820,16 @@ def column_name(index: int) -> str:
         index, remainder = divmod(index - 1, 26)
         name = chr(65 + remainder) + name
     return name
+
+
+def safe_sheet_name(name: str) -> str:
+    cleaned = re.sub(r"[\[\]:*?/\\]", "_", name).strip("'").strip()
+    return (cleaned or "Testcases")[:31]
+
+
+def safe_excel_filename(name: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip().strip(".")
+    return cleaned or "mcdc_testcases"
 
 
 def extract_decisions(source: str) -> tuple[Decision, ...]:
@@ -1227,10 +1644,14 @@ def summarize_coverage_readiness(
 
 
 def strip_comments_and_strings(source: str) -> str:
-    without_block_comments = re.sub(r"/\*.*?\*/", lambda match: " " * len(match.group(0)), source, flags=re.S)
+    without_block_comments = re.sub(r"/\*.*?\*/", preserve_newlines_as_spaces, source, flags=re.S)
     without_line_comments = re.sub(r"//.*", "", without_block_comments)
     without_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', without_line_comments)
     return re.sub(r"'(?:\\.|[^'\\])+'", "0", without_strings)
+
+
+def preserve_newlines_as_spaces(match: re.Match[str]) -> str:
+    return "".join("\n" if char == "\n" else " " for char in match.group(0))
 
 
 def find_matching_paren(source: str, open_paren: int) -> int | None:

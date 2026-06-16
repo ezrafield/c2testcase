@@ -4,11 +4,19 @@ import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
 from src.api.routes import health
-from src.services.mcdc_generator import MCDC_MODES, generate_mcdc_report, write_report_artifacts
+from src.services.mcdc_generator import (
+    ExcelExportMetadata,
+    MCDC_MODES,
+    generate_mcdc_report,
+    safe_excel_filename,
+    testcase_table_rows_from_dict,
+    write_report_artifacts,
+    write_testcase_workbook_rows,
+)
 
 ManualValue = int | float | bool | str
 
@@ -34,6 +42,10 @@ async def generate_cases(
     input_variables: str = Form(default=""),
     output_variables: str = Form(default=""),
     compile_flags: str = Form(default=""),
+    excel_format_version: str = Form(default="1.3"),
+    excel_architecture: str = Form(default=""),
+    excel_scope: str = Form(default=""),
+    excel_name: str = Form(default="mcdc_testcases"),
     max_conditions: int = Form(default=12),
     mcdc_mode: str = Form(default="unique-cause"),
 ) -> dict[str, object]:
@@ -75,7 +87,17 @@ async def generate_cases(
             manual_outputs=manual_outputs,
             mcdc_mode=mcdc_mode,
         )
-        json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, output_dir)
+        excel_metadata = ExcelExportMetadata(
+            format_version=excel_format_version.strip() or "1.3",
+            architecture=excel_architecture.strip(),
+            scope=excel_scope.strip(),
+            name=excel_name.strip() or "mcdc_testcases",
+        )
+        json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(
+            report,
+            output_dir,
+            excel_metadata=excel_metadata,
+        )
 
         return {
             "report": report.to_dict(),
@@ -85,8 +107,30 @@ async def generate_cases(
                 "gap_report.md": gap_report_path.read_text(encoding="utf-8"),
             },
             "downloads": {
-                "mcdc_testcases.xlsx": base64.b64encode(excel_path.read_bytes()).decode("ascii"),
+                excel_path.name: base64.b64encode(excel_path.read_bytes()).decode("ascii"),
             },
+            "excel_filename": excel_path.name,
+        }
+
+
+@app.post("/api/export-excel")
+async def export_excel(payload: dict[str, object] = Body(...)) -> dict[str, str]:
+    report = payload.get("report")
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=400, detail="report is required.")
+    metadata = ExcelExportMetadata(
+        format_version=str(payload.get("format_version") or "1.3").strip() or "1.3",
+        architecture=str(payload.get("architecture") or "").strip(),
+        scope=str(payload.get("scope") or "").strip(),
+        name=str(payload.get("name") or "mcdc_testcases").strip() or "mcdc_testcases",
+    )
+    with TemporaryDirectory(prefix="c2testcase-export-") as tmp:
+        output_dir = Path(tmp)
+        excel_path = output_dir / f"{safe_excel_filename(metadata.name)}.xlsx"
+        write_testcase_workbook_rows(testcase_table_rows_from_dict(report), excel_path, metadata)
+        return {
+            "filename": excel_path.name,
+            "download": base64.b64encode(excel_path.read_bytes()).decode("ascii"),
         }
 
 
@@ -284,6 +328,45 @@ def render_index_html() -> str:
       border: 1px solid var(--line);
       border-radius: 6px;
     }
+    .export-panel {
+      display: none;
+      min-height: 420px;
+      max-height: calc(100vh - 240px);
+      overflow: auto;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 18px;
+    }
+    .export-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(180px, 1fr));
+      gap: 0 14px;
+      max-width: 860px;
+    }
+    .export-note {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .export-action {
+      width: auto;
+      min-width: 150px;
+      background: #facc15;
+      color: #1f2937;
+      border: 1px solid #eab308;
+    }
+    .export-action:hover {
+      background: #eab308;
+    }
+    .export-status {
+      margin-top: 12px;
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
     .ccode-wrap {
       display: none;
       height: calc(100vh - 240px);
@@ -417,6 +500,8 @@ def render_index_html() -> str:
       .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       pre { max-height: 520px; }
       .table-wrap { max-height: 520px; }
+      .export-panel { max-height: 520px; }
+      .export-grid { grid-template-columns: 1fr; }
       .ccode-wrap { height: 520px; max-height: 520px; }
       .ccode-grid { grid-template-columns: 1fr; }
       .code-pane { border-right: 0; border-bottom: 1px solid var(--line); min-height: 240px; }
@@ -466,11 +551,34 @@ def render_index_html() -> str:
         <button class="tab" type="button" data-artifact="mcdc_cases.json">JSON</button>
         <button class="tab" type="button" data-artifact="generated_mcdc_tests.c">Harness</button>
         <button class="tab" type="button" data-view="testcase_table">Testcase_table</button>
-        <button class="tab" type="button" data-download="mcdc_testcases.xlsx">Export Excel</button>
+        <button class="tab" type="button" data-download="excel">Export Excel</button>
         <button class="tab" type="button" data-view="ccode_interface">Ccode_interface</button>
       </div>
       <pre id="artifact">Upload a C source file to generate cases.</pre>
       <div id="testcase-table" class="table-wrap"></div>
+      <div id="excel-export-panel" class="export-panel">
+        <p class="export-note">Note: this export gets data from Testcase_table.</p>
+        <div class="export-grid">
+          <div>
+            <label for="excel_format_version">Excel Format Version</label>
+            <input id="excel_format_version" type="text" value="1.3">
+          </div>
+          <div>
+            <label for="excel_architecture">Excel Architecture</label>
+            <input id="excel_architecture" type="text" placeholder="IO_CANII03AD5D24CNV_OSM_CSKN_10_egkn_EP [C-Code]">
+          </div>
+          <div>
+            <label for="excel_scope">Excel Scope</label>
+            <input id="excel_scope" type="text" placeholder="io-canii03ad5d24cnv-osm-cskn-1.c:1:J_canrv_03ad5d24_cnvt">
+          </div>
+          <div>
+            <label for="excel_name">Excel Name</label>
+            <input id="excel_name" type="text" value="mcdc_testcases">
+          </div>
+        </div>
+        <button id="excel_export_submit" class="export-action" type="button">Export</button>
+        <div id="excel_export_status" class="export-status"></div>
+      </div>
       <div id="ccode-interface" class="ccode-wrap"></div>
     </section>
   </main>
@@ -480,8 +588,11 @@ def render_index_html() -> str:
     const error = document.getElementById("error");
     const artifact = document.getElementById("artifact");
     const testcaseTable = document.getElementById("testcase-table");
+    const excelExportPanel = document.getElementById("excel-export-panel");
+    const excelExportSubmit = document.getElementById("excel_export_submit");
+    const excelExportStatus = document.getElementById("excel_export_status");
     const ccodeInterface = document.getElementById("ccode-interface");
-    const state = { artifacts: {}, downloads: {}, report: null, active: "gap_report.md" };
+    const state = { artifacts: {}, downloads: {}, excelFilename: "mcdc_testcases.xlsx", report: null, active: "gap_report.md" };
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -495,10 +606,13 @@ def render_index_html() -> str:
         if (!response.ok) throw new Error(payload.detail || "Generation failed");
         state.artifacts = payload.artifacts;
         state.downloads = payload.downloads || {};
+        state.excelFilename = payload.excel_filename || "mcdc_testcases.xlsx";
         state.report = payload.report;
         renderSummary(payload.report);
         if (state.active === "testcase_table") {
           renderTestcaseTable();
+        } else if (state.active === "excel_export") {
+          renderExcelExportPanel();
         } else if (state.active === "ccode_interface") {
           renderCcodeInterface();
         } else {
@@ -514,13 +628,12 @@ def render_index_html() -> str:
 
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => {
-        if (button.dataset.download) {
-          downloadArtifact(button.dataset.download);
-          return;
-        }
         document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
         button.classList.add("active");
-        if (button.dataset.view === "testcase_table") {
+        if (button.dataset.download === "excel") {
+          state.active = "excel_export";
+          renderExcelExportPanel();
+        } else if (button.dataset.view === "testcase_table") {
           state.active = "testcase_table";
           renderTestcaseTable();
         } else if (button.dataset.view === "ccode_interface") {
@@ -533,9 +646,12 @@ def render_index_html() -> str:
       });
     });
 
+    excelExportSubmit.addEventListener("click", exportExcel);
+
     function renderSummary(report) {
       const decisions = report.decisions || [];
-      const cases = decisions.reduce((total, decision) => total + decision.cases.length, 0);
+      const cases = report.testcase_table?.rows?.length
+        ?? decisions.reduce((total, decision) => total + decision.cases.length, 0);
       document.getElementById("score").textContent = `${Math.round((report.score || 0) * 100)}%`;
       document.getElementById("decisions").textContent = decisions.length;
       document.getElementById("cases").textContent = cases;
@@ -546,6 +662,7 @@ def render_index_html() -> str:
     function renderArtifact(name) {
       artifact.style.display = "block";
       testcaseTable.style.display = "none";
+      excelExportPanel.style.display = "none";
       ccodeInterface.style.display = "none";
       artifact.textContent = state.artifacts[name] || "No artifact generated yet.";
     }
@@ -553,6 +670,7 @@ def render_index_html() -> str:
     function renderTestcaseTable() {
       artifact.style.display = "none";
       testcaseTable.style.display = "block";
+      excelExportPanel.style.display = "none";
       ccodeInterface.style.display = "none";
       testcaseTable.replaceChildren();
       if (!state.report) {
@@ -612,9 +730,19 @@ def render_index_html() -> str:
       testcaseTable.append(table);
     }
 
+    function renderExcelExportPanel() {
+      artifact.style.display = "none";
+      testcaseTable.style.display = "none";
+      excelExportPanel.style.display = "block";
+      ccodeInterface.style.display = "none";
+      excelExportSubmit.disabled = !state.report;
+      excelExportStatus.textContent = state.report ? "" : "Generate cases before exporting Excel.";
+    }
+
     function renderCcodeInterface() {
       artifact.style.display = "none";
       testcaseTable.style.display = "none";
+      excelExportPanel.style.display = "none";
       ccodeInterface.style.display = "block";
       ccodeInterface.replaceChildren();
       if (!state.report) {
@@ -798,11 +926,17 @@ def render_index_html() -> str:
       return node;
     }
 
-    function downloadArtifact(name) {
-      const encoded = state.downloads[name];
+    async function downloadArtifact(name) {
+      if (name === "excel") {
+        await exportExcel();
+        return;
+      }
+      const filename = name;
+      const encoded = state.downloads[filename];
       if (!encoded) {
         artifact.style.display = "block";
         testcaseTable.style.display = "none";
+        excelExportPanel.style.display = "none";
         ccodeInterface.style.display = "none";
         artifact.textContent = "Generate cases before downloading Excel.";
         return;
@@ -811,10 +945,51 @@ def render_index_html() -> str:
       const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = name;
+      link.download = filename;
       link.click();
       URL.revokeObjectURL(link.href);
-      artifact.textContent = `Downloaded ${name}.`;
+      artifact.textContent = `Downloaded ${filename}.`;
+    }
+
+    async function exportExcel() {
+      if (!state.report) {
+        artifact.style.display = "block";
+        testcaseTable.style.display = "none";
+        excelExportPanel.style.display = "none";
+        ccodeInterface.style.display = "none";
+        artifact.textContent = "Generate cases before exporting Excel.";
+        return;
+      }
+      const response = await fetch("/api/export-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          report: state.report,
+          format_version: document.getElementById("excel_format_version").value,
+          architecture: document.getElementById("excel_architecture").value,
+          scope: document.getElementById("excel_scope").value,
+          name: document.getElementById("excel_name").value,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        artifact.style.display = "block";
+        testcaseTable.style.display = "none";
+        excelExportPanel.style.display = "none";
+        ccodeInterface.style.display = "none";
+        artifact.textContent = payload.detail || "Excel export failed.";
+        return;
+      }
+      state.excelFilename = payload.filename;
+      state.downloads[payload.filename] = payload.download;
+      const bytes = Uint8Array.from(atob(payload.download), (char) => char.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = payload.filename;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      excelExportStatus.textContent = `Downloaded ${payload.filename}.`;
     }
   </script>
 </body>
