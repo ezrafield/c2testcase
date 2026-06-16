@@ -29,6 +29,11 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "Excel Architecture" in response.text
     assert "Excel Scope" in response.text
     assert "Excel Name" in response.text
+    assert '<input id="excel_format_version" type="text">' in response.text
+    assert '<input id="excel_architecture" type="text">' in response.text
+    assert '<input id="excel_scope" type="text">' in response.text
+    assert '<input id="excel_name" type="text">' in response.text
+    assert "#99ccff" in response.text
     assert "testcase-table" in response.text
     assert "excel-export-panel" in response.text
     assert "excel_export_submit" in response.text

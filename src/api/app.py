@@ -353,12 +353,12 @@ def render_index_html() -> str:
     .export-action {
       width: auto;
       min-width: 150px;
-      background: #facc15;
+      background: #99ccff;
       color: #1f2937;
-      border: 1px solid #eab308;
+      border: 1px solid #6699cc;
     }
     .export-action:hover {
-      background: #eab308;
+      background: #7fb5e8;
     }
     .export-status {
       margin-top: 12px;
@@ -561,19 +561,19 @@ def render_index_html() -> str:
         <div class="export-grid">
           <div>
             <label for="excel_format_version">Excel Format Version</label>
-            <input id="excel_format_version" type="text" value="1.3">
+            <input id="excel_format_version" type="text">
           </div>
           <div>
             <label for="excel_architecture">Excel Architecture</label>
-            <input id="excel_architecture" type="text" placeholder="IO_CANII03AD5D24CNV_OSM_CSKN_10_egkn_EP [C-Code]">
+            <input id="excel_architecture" type="text">
           </div>
           <div>
             <label for="excel_scope">Excel Scope</label>
-            <input id="excel_scope" type="text" placeholder="io-canii03ad5d24cnv-osm-cskn-1.c:1:J_canrv_03ad5d24_cnvt">
+            <input id="excel_scope" type="text">
           </div>
           <div>
             <label for="excel_name">Excel Name</label>
-            <input id="excel_name" type="text" value="mcdc_testcases">
+            <input id="excel_name" type="text">
           </div>
         </div>
         <button id="excel_export_submit" class="export-action" type="button">Export</button>
