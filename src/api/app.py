@@ -353,12 +353,12 @@ def render_index_html() -> str:
     .export-action {
       width: auto;
       min-width: 150px;
-      background: #f4b183;
+      background: #99ccff;
       color: #1f2937;
-      border: 1px solid #c98245;
+      border: 1px solid #6699cc;
     }
     .export-action:hover {
-      background: #e6a06c;
+      background: #7fb5e8;
     }
     .export-status {
       margin-top: 12px;
