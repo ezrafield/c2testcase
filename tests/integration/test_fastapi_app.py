@@ -54,6 +54,17 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     assert payload["report"]["manual_inputs"] == {"expected": "PASS", "IN_gear": "D"}
     assert payload["report"]["output_variables"] == ["VF24blatgfd_s", "VS15lat_grev"]
     assert payload["report"]["manual_outputs"] == {"VF24blatgfd_s": -24.5, "VS15lat_grev": -2.5}
+    assert payload["report"]["mcdc_complete"] is True
+    assert payload["report"]["testcase_table"]["input_columns"] == ["a", "b", "flag", "expected", "IN_gear"]
+    assert payload["report"]["testcase_table"]["output_columns"] == ["VF24blatgfd_s", "VS15lat_grev"]
+    assert payload["report"]["testcase_table"]["mcdc_complete"] is True
+    assert payload["report"]["testcase_table"]["rows"][0]["inputs"].keys() == {
+        "a",
+        "b",
+        "flag",
+        "expected",
+        "IN_gear",
+    }
     assert "coverage_ready" in payload["report"]
     assert "coverage_status" in payload["report"]
     assert "toolchain_details" in payload["report"]

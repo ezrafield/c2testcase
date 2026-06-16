@@ -3,6 +3,7 @@ from zipfile import ZipFile
 
 from src.services.mcdc_generator import (
     extract_decisions,
+    extract_function_parameters,
     find_tool_path,
     generate_mcdc_report,
     summarize_coverage_readiness,
@@ -16,6 +17,22 @@ def test_extracts_conditions_from_boolean_decision() -> None:
 
     assert len(decisions) == 1
     assert decisions[0].conditions == ("a > 0", "b < 10", "flag")
+
+
+def test_extracts_target_function_input_parameters() -> None:
+    source = """
+    static int helper(int ignored) { return ignored; }
+    int logic(const uint8_t f_canrxok, uint16_t VU16srs_lat_g_fd_imrx, float *VF24blatgfd_s) {
+        if (f_canrxok && VU16srs_lat_g_fd_imrx > 0) return 1;
+        return 0;
+    }
+    """
+
+    assert extract_function_parameters(source, "logic") == (
+        "f_canrxok",
+        "VU16srs_lat_g_fd_imrx",
+        "VF24blatgfd_s",
+    )
 
 
 def test_generates_full_mcdc_for_simple_expression(tmp_path: Path) -> None:
@@ -102,6 +119,44 @@ def test_testcase_table_fills_missing_manual_values(tmp_path: Path) -> None:
     assert [row[3] for row in rows[2:]] == ["MANUAL", "MANUAL", "MANUAL"]
     assert [row[4] for row in rows[2:]] == ["MANUAL", "MANUAL", "MANUAL"]
     assert all(cell != "" for row in rows for cell in row)
+
+
+def test_testcase_table_columns_default_to_c_function_inputs(tmp_path: Path) -> None:
+    source = tmp_path / "logic.c"
+    source.write_text(
+        "int logic(int a,int b,int extra_input){ if (a > 3 && b < 4) return 1; return 0; }"
+    )
+
+    report = generate_mcdc_report(source, target_function="logic")
+    rows = build_testcase_table_rows(report)
+
+    assert report.input_variables == ("a", "b", "extra_input")
+    assert rows[1] == ["Step", "a", "b", "extra_input", "Decision_Result"]
+    assert [row[3] for row in rows[2:]] == ["MANUAL", "MANUAL", "MANUAL"]
+    assert all(cell != "" for row in rows for cell in row)
+
+
+def test_report_returns_structured_testcase_table_from_c_inputs(tmp_path: Path) -> None:
+    source = tmp_path / "logic.c"
+    source.write_text(
+        "int logic(int a,int b,int flag){ if ((a > 0 && b < 10) || flag) return 1; return 0; }"
+    )
+
+    report = generate_mcdc_report(source, target_function="logic", mcdc_mode="masking")
+    payload = report.to_dict()
+
+    assert payload["score"] == 1.0
+    assert payload["mcdc_complete"] is True
+    assert payload["testcase_table"]["score"] == 1.0
+    assert payload["testcase_table"]["mcdc_complete"] is True
+    assert payload["testcase_table"]["input_columns"] == ["a", "b", "flag"]
+    assert payload["testcase_table"]["output_columns"] == ["Decision_Result"]
+    assert payload["testcase_table"]["rows"]
+    for index, row in enumerate(payload["testcase_table"]["rows"]):
+        assert row["step"] == index
+        assert set(row["inputs"]) == {"a", "b", "flag"}
+        assert row["outputs"].keys() == {"Decision_Result"}
+        assert row["covers"]
 
 
 def test_direct_generation_handles_large_uniform_and_chain(tmp_path: Path) -> None:

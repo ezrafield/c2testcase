@@ -94,12 +94,14 @@ class MCDCReport:
             "source": self.source,
             "score": round(self.score, 4),
             "score_kind": "generated_target_score",
+            "mcdc_complete": self.score == 1.0,
             "mcdc_mode": self.mcdc_mode,
             "target_function": self.target_function,
             "input_variables": list(self.input_variables),
             "manual_inputs": self.manual_inputs,
             "output_variables": list(self.output_variables),
             "manual_outputs": self.manual_outputs,
+            "testcase_table": testcase_table(report=self),
             "headers": list(self.headers),
             "include_dirs": list(self.include_dirs),
             "compile_flags": list(self.compile_flags),
@@ -161,6 +163,7 @@ def generate_mcdc_report(
     source = source_path.read_text(encoding="utf-8")
     clean_source = strip_comments_and_strings(source)
     decisions = extract_decisions(clean_source)
+    detected_input_variables = extract_function_parameters(clean_source, target_function)
     warnings: list[str] = []
 
     if not decisions:
@@ -172,7 +175,7 @@ def generate_mcdc_report(
     return MCDCReport(
         source=str(source_path),
         decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode) for decision in decisions),
-        input_variables=tuple(dict.fromkeys(input_variables)),
+        input_variables=tuple(dict.fromkeys((*detected_input_variables, *input_variables))),
         manual_inputs=manual_inputs or {},
         output_variables=tuple(dict.fromkeys(output_variables)),
         manual_outputs=manual_outputs or {},
@@ -215,6 +218,26 @@ def write_testcase_workbook(report: MCDCReport, output_path: Path) -> None:
 
 
 def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
+    table = testcase_table(report)
+    rows: list[list[TableValue]] = [
+        ["Mode", *(["Inputs"] * len(table["input_columns"])), *(["Outputs"] * len(table["output_columns"]))],
+        ["Step", *table["input_columns"], *table["output_columns"]],
+    ]
+    if table["rows"]:
+        for row in table["rows"]:
+            rows.append([row["step"], *row["inputs"].values(), *row["outputs"].values()])
+        return rows
+    rows.append(
+        [
+            "No generated testcases",
+            *(["MANUAL"] * len(table["input_columns"])),
+            *(["MANUAL"] * len(table["output_columns"])),
+        ]
+    )
+    return rows
+
+
+def testcase_table(report: MCDCReport) -> dict[str, Any]:
     inferred_variable_names = sorted(
         {
             name
@@ -225,39 +248,40 @@ def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     )
     variable_names = list(dict.fromkeys((*report.input_variables, *inferred_variable_names)))
     output_names = list(report.output_variables) or ["Decision_Result"]
-    group_headers: list[TableValue] = [
-        "Mode",
-        *(["Inputs"] * len(variable_names)),
-        *(["Outputs"] * len(output_names)),
-    ]
-    column_headers: list[TableValue] = [
-        "Step",
-        *variable_names,
-        *output_names,
-    ]
-    rows: list[list[TableValue]] = [group_headers, column_headers]
+    rows: list[dict[str, Any]] = []
     step_index = 0
     for result in report.decisions:
         for row in sorted(result.cases, key=lambda case: testcase_sort_key(case, variable_names)):
-            assignments = [
-                row.assignments.get(name, report.manual_inputs.get(name, "MANUAL"))
+            assignments = {
+                name: row.assignments.get(name, report.manual_inputs.get(name, "MANUAL"))
                 for name in variable_names
-            ]
-            outputs = [
-                row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "MANUAL")
+            }
+            outputs = {
+                name: row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "MANUAL")
                 for name in output_names
-            ]
+            }
             rows.append(
-                [
-                    step_index,
-                    *assignments,
-                    *outputs,
-                ]
+                {
+                    "step": step_index,
+                    "decision_id": result.decision.id,
+                    "line": result.decision.line,
+                    "inputs": assignments,
+                    "outputs": outputs,
+                    "mcdc_condition_values": list(row.values),
+                    "decision_result": row.decision_result,
+                    "covers": list(row.covers),
+                    "notes": list(row.notes),
+                }
             )
             step_index += 1
-    if len(rows) == 2:
-        rows.append(["No generated testcases", *(["MANUAL"] * len(variable_names)), *(["MANUAL"] * len(output_names))])
-    return rows
+    return {
+        "input_columns": variable_names,
+        "output_columns": output_names,
+        "score": round(report.score, 4),
+        "score_kind": "generated_target_score",
+        "mcdc_complete": report.score == 1.0,
+        "rows": rows,
+    }
 
 
 def testcase_sort_key(row: MCDCRow, variable_names: list[str]) -> tuple[bool, tuple[str, ...]]:
@@ -421,6 +445,50 @@ def extract_decisions(source: str) -> tuple[Decision, ...]:
         index = close_paren + 1
 
     return tuple(decisions)
+
+
+def extract_function_parameters(source: str, target_function: str | None = None) -> tuple[str, ...]:
+    pattern = re.compile(r"\b([A-Za-z_]\w*)\s*\(([^()]*)\)\s*(?:\{|;)")
+    for match in pattern.finditer(source):
+        function_name = match.group(1)
+        if function_name in KEYWORDS_WITH_DECISIONS:
+            continue
+        if target_function and function_name != target_function:
+            continue
+        parameters = parse_parameter_names(match.group(2))
+        if parameters or target_function:
+            return parameters
+    return ()
+
+
+def parse_parameter_names(raw_parameters: str) -> tuple[str, ...]:
+    names: list[str] = []
+    for raw_parameter in split_parameter_list(raw_parameters):
+        parameter = raw_parameter.strip()
+        if not parameter or parameter == "void" or "..." in parameter:
+            continue
+        parameter = parameter.split("=")[0].strip()
+        parameter = re.sub(r"\[[^\]]*\]", "", parameter)
+        match = re.search(r"([A-Za-z_]\w*)\s*$", parameter)
+        if match:
+            names.append(match.group(1))
+    return tuple(dict.fromkeys(names))
+
+
+def split_parameter_list(raw_parameters: str) -> list[str]:
+    parameters: list[str] = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(raw_parameters):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parameters.append(raw_parameters[start:index])
+            start = index + 1
+    parameters.append(raw_parameters[start:])
+    return parameters
 
 
 def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode: str = "unique-cause") -> DecisionResult:

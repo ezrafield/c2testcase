@@ -462,9 +462,12 @@ def render_index_html() -> str:
         testcaseTable.append(emptyNode("No generated testcases."));
         return;
       }
-      const inferredVariables = [...new Set(rows.flatMap((row) => Object.keys(row.assignments || {})))].sort();
-      const variables = [...new Set([...(state.report.input_variables || []), ...inferredVariables])];
-      const outputVariables = (state.report.output_variables || []).length
+      const variables = state.report.testcase_table?.input_columns?.length
+        ? state.report.testcase_table.input_columns
+        : [...new Set([...(state.report.input_variables || []), ...[...new Set(rows.flatMap((row) => Object.keys(row.inputs || {})))].sort()])];
+      const outputVariables = state.report.testcase_table?.output_columns?.length
+        ? state.report.testcase_table.output_columns
+        : (state.report.output_variables || []).length
         ? state.report.output_variables
         : ["Decision_Result"];
       rows.sort((left, right) => compareTestcaseRows(left, right, variables));
@@ -490,9 +493,9 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
-        const assignments = variables.map((name) => row.assignments?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL");
+        const assignments = variables.map((name) => row.inputs?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL");
         const outputs = outputVariables.map((name) =>
-          name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL"
+          row.outputs?.[name] ?? (name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL")
         );
         const values = [
           index,
@@ -508,6 +511,18 @@ def render_index_html() -> str:
     }
 
     function testcaseRows(report) {
+      if (report.testcase_table?.rows) {
+        return report.testcase_table.rows.map((row) => ({
+          decisionId: row.decision_id,
+          line: row.line,
+          decisionResult: row.decision_result,
+          covers: row.covers || [],
+          values: row.mcdc_condition_values || [],
+          inputs: row.inputs || {},
+          outputs: row.outputs || {},
+          notes: row.notes || [],
+        }));
+      }
       return (report.decisions || []).flatMap((decision) =>
         (decision.cases || []).map((row) => ({
           decisionId: decision.id,
@@ -515,7 +530,8 @@ def render_index_html() -> str:
           decisionResult: row.decision_result,
           covers: row.covers || [],
           values: row.values || [],
-          assignments: row.assignments || {},
+          inputs: row.assignments || {},
+          outputs: {},
           notes: row.notes || [],
         }))
       );
@@ -526,8 +542,8 @@ def render_index_html() -> str:
         return left.decisionResult ? -1 : 1;
       }
       for (const variable of variables) {
-        const leftValue = String(left.assignments?.[variable] ?? "");
-        const rightValue = String(right.assignments?.[variable] ?? "");
+        const leftValue = String(left.inputs?.[variable] ?? "");
+        const rightValue = String(right.inputs?.[variable] ?? "");
         const compared = leftValue.localeCompare(rightValue, undefined, { numeric: true });
         if (compared !== 0) return compared;
       }
