@@ -146,6 +146,7 @@ def test_report_returns_structured_testcase_table_from_c_inputs(tmp_path: Path) 
     payload = report.to_dict()
 
     assert payload["score"] == 1.0
+    assert payload["source_text"].startswith("int logic")
     assert payload["mcdc_complete"] is True
     assert payload["testcase_table"]["score"] == 1.0
     assert payload["testcase_table"]["mcdc_complete"] is True

@@ -67,6 +67,7 @@ class DecisionResult:
 @dataclass(frozen=True)
 class MCDCReport:
     source: str
+    source_text: str
     decisions: tuple[DecisionResult, ...]
     input_variables: tuple[str, ...] = field(default_factory=tuple)
     manual_inputs: dict[str, TableValue] = field(default_factory=dict)
@@ -92,6 +93,7 @@ class MCDCReport:
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source,
+            "source_text": self.source_text,
             "score": round(self.score, 4),
             "score_kind": "generated_target_score",
             "mcdc_complete": self.score == 1.0,
@@ -174,6 +176,7 @@ def generate_mcdc_report(
 
     return MCDCReport(
         source=str(source_path),
+        source_text=source,
         decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode) for decision in decisions),
         input_variables=tuple(dict.fromkeys((*detected_input_variables, *input_variables))),
         manual_inputs=manual_inputs or {},

@@ -23,6 +23,7 @@ The response `report` includes a first-class `testcase_table`:
 
 ```json
 {
+  "source_text": "int logic(int a,int b,int flag){ ... }",
   "score_kind": "generated_target_score",
   "mcdc_complete": true,
   "testcase_table": {

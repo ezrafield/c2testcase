@@ -20,7 +20,9 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert response.status_code == 200
     assert "Testcase_table" in response.text
     assert "Export Excel" in response.text
+    assert "Ccode_interface" in response.text
     assert "testcase-table" in response.text
+    assert "ccode-interface" in response.text
 
 
 def test_web_app_generates_mcdc_artifacts() -> None:
@@ -49,6 +51,7 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     payload = response.json()
     assert response.status_code == 200
     assert payload["report"]["score"] == 1.0
+    assert payload["report"]["source_text"].startswith("int logic")
     assert payload["report"]["mcdc_mode"] == "masking"
     assert payload["report"]["input_variables"] == ["a", "b", "flag", "expected", "IN_gear"]
     assert payload["report"]["manual_inputs"] == {"expected": "PASS", "IN_gear": "D"}

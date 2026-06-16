@@ -284,6 +284,91 @@ def render_index_html() -> str:
       border: 1px solid var(--line);
       border-radius: 6px;
     }
+    .ccode-wrap {
+      display: none;
+      min-height: 420px;
+      max-height: calc(100vh - 240px);
+      overflow: auto;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .ccode-grid {
+      display: grid;
+      grid-template-columns: minmax(460px, 1.25fr) minmax(320px, .75fr);
+      min-height: 420px;
+    }
+    .code-pane {
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: #f9fbfe;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .code-line {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 2px 10px 2px 0;
+      border-left: 4px solid transparent;
+      white-space: pre;
+    }
+    .code-line.covered {
+      background: #ecfdf5;
+      border-left-color: var(--accent);
+      cursor: pointer;
+    }
+    .code-line.active {
+      background: #d9f99d;
+      border-left-color: #4d7c0f;
+    }
+    .line-no {
+      color: var(--muted);
+      text-align: right;
+      user-select: none;
+    }
+    .line-hit {
+      color: var(--accent-strong);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .source-code {
+      overflow-wrap: normal;
+    }
+    .decision-pane {
+      padding: 14px;
+      overflow: auto;
+      background: white;
+    }
+    .decision-title {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .decision-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .case-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background: #ffffff;
+    }
+    .case-card strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .case-detail {
+      margin: 4px 0;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -329,6 +414,9 @@ def render_index_html() -> str:
       .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       pre { max-height: 520px; }
       .table-wrap { max-height: 520px; }
+      .ccode-wrap { max-height: 520px; }
+      .ccode-grid { grid-template-columns: 1fr; }
+      .code-pane { border-right: 0; border-bottom: 1px solid var(--line); }
     }
   </style>
 </head>
@@ -375,9 +463,11 @@ def render_index_html() -> str:
         <button class="tab" type="button" data-artifact="generated_mcdc_tests.c">Harness</button>
         <button class="tab" type="button" data-view="testcase_table">Testcase_table</button>
         <button class="tab" type="button" data-download="mcdc_testcases.xlsx">Export Excel</button>
+        <button class="tab" type="button" data-view="ccode_interface">Ccode_interface</button>
       </div>
       <pre id="artifact">Upload a C source file to generate cases.</pre>
       <div id="testcase-table" class="table-wrap"></div>
+      <div id="ccode-interface" class="ccode-wrap"></div>
     </section>
   </main>
   <script>
@@ -386,6 +476,7 @@ def render_index_html() -> str:
     const error = document.getElementById("error");
     const artifact = document.getElementById("artifact");
     const testcaseTable = document.getElementById("testcase-table");
+    const ccodeInterface = document.getElementById("ccode-interface");
     const state = { artifacts: {}, downloads: {}, report: null, active: "gap_report.md" };
 
     form.addEventListener("submit", async (event) => {
@@ -404,6 +495,8 @@ def render_index_html() -> str:
         renderSummary(payload.report);
         if (state.active === "testcase_table") {
           renderTestcaseTable();
+        } else if (state.active === "ccode_interface") {
+          renderCcodeInterface();
         } else {
           renderArtifact(state.active);
         }
@@ -426,6 +519,9 @@ def render_index_html() -> str:
         if (button.dataset.view === "testcase_table") {
           state.active = "testcase_table";
           renderTestcaseTable();
+        } else if (button.dataset.view === "ccode_interface") {
+          state.active = "ccode_interface";
+          renderCcodeInterface();
         } else {
           state.active = button.dataset.artifact;
           renderArtifact(state.active);
@@ -446,12 +542,14 @@ def render_index_html() -> str:
     function renderArtifact(name) {
       artifact.style.display = "block";
       testcaseTable.style.display = "none";
+      ccodeInterface.style.display = "none";
       artifact.textContent = state.artifacts[name] || "No artifact generated yet.";
     }
 
     function renderTestcaseTable() {
       artifact.style.display = "none";
       testcaseTable.style.display = "block";
+      ccodeInterface.style.display = "none";
       testcaseTable.replaceChildren();
       if (!state.report) {
         testcaseTable.append(emptyNode("No generated testcases yet."));
@@ -510,6 +608,145 @@ def render_index_html() -> str:
       testcaseTable.append(table);
     }
 
+    function renderCcodeInterface() {
+      artifact.style.display = "none";
+      testcaseTable.style.display = "none";
+      ccodeInterface.style.display = "block";
+      ccodeInterface.replaceChildren();
+      if (!state.report) {
+        ccodeInterface.append(emptyNode("No C source loaded yet."));
+        return;
+      }
+      const lines = (state.report.source_text || "").split(/\\r?\\n/);
+      if (!lines.length || (lines.length === 1 && lines[0] === "")) {
+        ccodeInterface.append(emptyNode("No C source text available in this report."));
+        return;
+      }
+      const decisionsByLine = new Map();
+      (state.report.decisions || []).forEach((decision) => {
+        const existing = decisionsByLine.get(decision.line) || [];
+        existing.push(decision);
+        decisionsByLine.set(decision.line, existing);
+      });
+      const rowsByDecision = new Map();
+      testcaseRows(state.report).forEach((row) => {
+        const existing = rowsByDecision.get(row.decisionId) || [];
+        existing.push(row);
+        rowsByDecision.set(row.decisionId, existing);
+      });
+
+      const grid = document.createElement("div");
+      grid.className = "ccode-grid";
+      const codePane = document.createElement("div");
+      codePane.className = "code-pane";
+      const decisionPane = document.createElement("div");
+      decisionPane.className = "decision-pane";
+      grid.append(codePane, decisionPane);
+      ccodeInterface.append(grid);
+
+      const showLine = (lineNumber) => {
+        codePane.querySelectorAll(".code-line").forEach((node) => node.classList.remove("active"));
+        const active = codePane.querySelector(`[data-line="${lineNumber}"]`);
+        if (active) active.classList.add("active");
+        decisionPane.replaceChildren();
+        const decisions = decisionsByLine.get(lineNumber) || [];
+        if (!decisions.length) {
+          decisionPane.append(emptyNode("Select a highlighted decision line to inspect generated testcases."));
+          return;
+        }
+        decisions.forEach((decision) => {
+          decisionPane.append(renderDecisionDetail(decision, rowsByDecision.get(decision.id) || []));
+        });
+      };
+
+      lines.forEach((text, index) => {
+        const lineNumber = index + 1;
+        const decisions = decisionsByLine.get(lineNumber) || [];
+        const line = document.createElement("div");
+        line.className = `code-line${decisions.length ? " covered" : ""}`;
+        line.dataset.line = String(lineNumber);
+        const number = document.createElement("span");
+        number.className = "line-no";
+        number.textContent = String(lineNumber);
+        const code = document.createElement("span");
+        code.className = "source-code";
+        code.textContent = text || " ";
+        const hit = document.createElement("span");
+        hit.className = "line-hit";
+        const testcaseCount = decisions.reduce((total, decision) => total + (rowsByDecision.get(decision.id) || []).length, 0);
+        hit.textContent = testcaseCount ? `${testcaseCount} cases` : "";
+        line.append(number, code, hit);
+        if (decisions.length) {
+          line.addEventListener("click", () => showLine(lineNumber));
+        }
+        codePane.append(line);
+      });
+      const firstDecisionLine = [...decisionsByLine.keys()][0];
+      showLine(firstDecisionLine || 0);
+    }
+
+    function renderDecisionDetail(decision, rows) {
+      const fragment = document.createDocumentFragment();
+      const title = document.createElement("h2");
+      title.className = "decision-title";
+      title.textContent = `${decision.id} line ${decision.line}`;
+      const meta = document.createElement("div");
+      meta.className = "decision-meta";
+      meta.textContent = `${Math.round((decision.score || 0) * 100)}% generated MC/DC, ${rows.length} testcase steps`;
+      const expression = document.createElement("div");
+      expression.className = "case-detail";
+      expression.textContent = `Decision: ${decision.expression}`;
+      fragment.append(title, meta, expression);
+
+      rows.forEach((row) => {
+        const card = document.createElement("div");
+        card.className = "case-card";
+        const heading = document.createElement("strong");
+        heading.textContent = `Step ${row.step}: ${row.decisionResult ? "decision true" : "decision false"}`;
+        card.append(heading);
+        card.append(detailLine(`Reason: ${formatReason(decision, row)}`));
+        card.append(detailLine(`Inputs: ${formatMap(row.inputs)}`));
+        card.append(detailLine(`Outputs: ${formatMap(row.outputs)}`));
+        card.append(detailLine(`Condition values: ${formatConditionValues(decision, row)}`));
+        if (row.notes?.length) {
+          card.append(detailLine(`Notes: ${row.notes.join("; ")}`));
+        }
+        fragment.append(card);
+      });
+      if (!rows.length) {
+        fragment.append(emptyNode("No generated testcase rows cover this decision line."));
+      }
+      return fragment;
+    }
+
+    function detailLine(text) {
+      const node = document.createElement("div");
+      node.className = "case-detail";
+      node.textContent = text;
+      return node;
+    }
+
+    function formatReason(decision, row) {
+      if (!row.covers?.length) {
+        return "selected as a generated decision row; no independent condition coverage was attributed";
+      }
+      return row.covers
+        .map((index) => `covers condition ${index} (${decision.conditions?.[index] || "unknown"})`)
+        .join("; ");
+    }
+
+    function formatMap(values) {
+      const entries = Object.entries(values || {});
+      if (!entries.length) return "none";
+      return entries.map(([name, value]) => `${name}=${value}`).join(", ");
+    }
+
+    function formatConditionValues(decision, row) {
+      return (decision.conditions || [])
+        .map((condition, index) => `${condition}=${row.values?.[index]}`)
+        .join(", ");
+    }
+
     function testcaseRows(report) {
       if (report.testcase_table?.rows) {
         return report.testcase_table.rows.map((row) => ({
@@ -562,6 +799,7 @@ def render_index_html() -> str:
       if (!encoded) {
         artifact.style.display = "block";
         testcaseTable.style.display = "none";
+        ccodeInterface.style.display = "none";
         artifact.textContent = "Generate cases before downloading Excel.";
         return;
       }
