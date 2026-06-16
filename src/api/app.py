@@ -286,9 +286,9 @@ def render_index_html() -> str:
     }
     .ccode-wrap {
       display: none;
+      height: calc(100vh - 240px);
       min-height: 420px;
-      max-height: calc(100vh - 240px);
-      overflow: auto;
+      overflow: hidden;
       background: white;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -296,7 +296,8 @@ def render_index_html() -> str:
     .ccode-grid {
       display: grid;
       grid-template-columns: minmax(460px, 1.25fr) minmax(320px, .75fr);
-      min-height: 420px;
+      height: 100%;
+      min-height: 0;
     }
     .code-pane {
       overflow: auto;
@@ -305,6 +306,7 @@ def render_index_html() -> str:
       font-family: Consolas, "Courier New", monospace;
       font-size: 13px;
       line-height: 1.5;
+      min-height: 0;
     }
     .code-line {
       display: grid;
@@ -341,6 +343,7 @@ def render_index_html() -> str:
       padding: 14px;
       overflow: auto;
       background: white;
+      min-height: 0;
     }
     .decision-title {
       margin: 0 0 8px;
@@ -414,9 +417,10 @@ def render_index_html() -> str:
       .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       pre { max-height: 520px; }
       .table-wrap { max-height: 520px; }
-      .ccode-wrap { max-height: 520px; }
+      .ccode-wrap { height: 520px; max-height: 520px; }
       .ccode-grid { grid-template-columns: 1fr; }
-      .code-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+      .code-pane { border-right: 0; border-bottom: 1px solid var(--line); min-height: 240px; }
+      .decision-pane { min-height: 260px; }
     }
   </style>
 </head>

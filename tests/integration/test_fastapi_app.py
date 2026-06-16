@@ -23,6 +23,9 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "Ccode_interface" in response.text
     assert "testcase-table" in response.text
     assert "ccode-interface" in response.text
+    assert ".ccode-grid" in response.text
+    assert "overflow: hidden;" in response.text
+    assert "height: 100%;" in response.text
 
 
 def test_web_app_generates_mcdc_artifacts() -> None:
