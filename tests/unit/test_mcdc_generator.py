@@ -133,10 +133,22 @@ def test_testcase_table_can_fill_manual_values_for_btc_export() -> None:
     report = {
         "testcase_table": {
             "input_columns": ["a", "b", "missing"],
+            "parameter_columns": ["cal"],
             "output_columns": ["y"],
+            "input_column_keys": ["a", "b", "missing"],
+            "parameter_column_keys": ["cal[0]"],
+            "output_column_keys": ["y"],
             "rows": [
-                {"inputs": {"a": "MANUAL", "b": 5, "missing": "MANUAL"}, "outputs": {"y": "MANUAL"}},
-                {"inputs": {"a": -2, "b": "MANUAL", "missing": "MANUAL"}, "outputs": {"y": 1}},
+                {
+                    "inputs": {"a": "MANUAL", "b": 5, "missing": "MANUAL"},
+                    "parameters": {"cal[0]": "MANUAL"},
+                    "outputs": {"y": "MANUAL"},
+                },
+                {
+                    "inputs": {"a": -2, "b": "MANUAL", "missing": "MANUAL"},
+                    "parameters": {"cal[0]": 3},
+                    "outputs": {"y": 1},
+                },
             ],
         }
     }
@@ -145,12 +157,12 @@ def test_testcase_table_can_fill_manual_values_for_btc_export() -> None:
     btc_rows = build_testcase_table_rows_from_dict(report, fill_manual_for_btc=True)
 
     assert default_rows[2:] == [
-        [0, "MANUAL", 5, "MANUAL", "MANUAL"],
-        [1, -2, "MANUAL", "MANUAL", 1],
+        [0, "MANUAL", 5, "MANUAL", "MANUAL", "MANUAL"],
+        [1, -2, "MANUAL", "MANUAL", 3, 1],
     ]
     assert btc_rows[2:] == [
-        [0, -2, 5, 0, 1],
-        [1, -2, 5, 0, 1],
+        [0, -2, 5, 0, 3, 1],
+        [1, -2, 5, 0, 3, 1],
     ]
     assert "MANUAL" not in [cell for row in btc_rows[2:] for cell in row]
 
@@ -217,7 +229,20 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     ]
     actual_rows = [[format_table_cell(cell) for cell in row] for row in rows]
 
-    assert actual_rows[:2] == expected_rows[:2]
+    assert actual_rows[0] == [
+        "Mode",
+        "Inputs",
+        *([" "] * 7),
+        "Parameters",
+        "Outputs",
+        *([" "] * 7),
+    ]
+    assert actual_rows[1] == [
+        "Step",
+        *expected_rows[1][2:10],
+        "f_canrxok",
+        *expected_rows[1][10:],
+    ]
     assert len(actual_rows) > len(expected_rows)
     assert report.score == 1.0
     assert [result.decision.line for result in report.decisions] == [174, 186, 201, 216]
@@ -227,10 +252,10 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     assert table["target_rows"] == len(table["rows"])
     assert table["concrete_rows"] == len(table["rows"])
     assert table["manual_required_rows"] == 0
-    assert table["input_columns"] == expected_rows[1][1:10]
+    assert table["input_columns"] == expected_rows[1][2:10]
+    assert table["parameter_columns"] == ["f_canrxok"]
     assert table["output_columns"] == expected_rows[1][10:]
-    assert table["input_columns"][0] == "f_canrxok"
-    assert table["input_columns"][1:] == [
+    assert table["input_columns"] == [
         "VU16srs_lat_g_fd_imrx",
         "VU16srs_lat_g_fdrx",
         "VU16srs_lon_g_fd_imrx",
@@ -242,10 +267,10 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     ]
     assert {row["decision_id"] for row in table["rows"]} == {"D1", "D2", "D3", "D4"}
     input_rows = [row["inputs"] for row in table["rows"]]
-    assert any(row["f_canrxok"] == 0 for row in input_rows)
     assert any(row["VU16srs_pitch_fdrx"] == 65535 for row in input_rows)
     assert any(row["VU16srs_roll_fdrx"] == 65535 for row in input_rows)
     assert any(row["VU16srs_yaw_fd_imrx"] == 65535 for row in input_rows)
+    assert {row["parameters"]["f_canrxok"] for row in table["rows"]} == {0, 1}
     assert any(row["outputs"]["VF24bpitchfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24brollfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24byawfd_s"] == 124.996 for row in table["rows"])
@@ -260,9 +285,12 @@ def test_targetlink_table_traces_condition_locals_to_root_interface_variables() 
     assert "Sa2_bgratiof_s_" not in table["input_columns"]
     assert "Sa4_Sum2" not in table["input_columns"]
     assert "VF24bgratiof_s" in table["input_columns"]
-    assert "AF24ln_bgratiofi_s" in table["input_columns"]
-    assert "AF24ln_bgratiofi_s" in table["output_columns"]
+    assert table["input_columns"].count("AF24ln_bgratiofi_s") == 3
+    assert table["input_column_keys"][table["input_columns"].index("AF24ln_bgratiofi_s")] == "AF24ln_bgratiofi_s[0]"
+    assert table["output_columns"].count("AF24ln_bgratiofi_s") == 3
     assert "VU16ln_rsh" in table["output_columns"]
+    assert "XS15ln_bgratiofd12" in table["parameter_columns"]
+    assert "XS15ln_bgratiofd12[0]" in table["parameter_column_keys"]
     ratio_rows = [row for row in table["rows"] if row["line"] in {437, 442}]
     assert ratio_rows
     assert {row["inputs"]["VF24bgratiof_s"] for row in ratio_rows} >= {-1.0, 0.0, 8.0, 9.0}
@@ -325,7 +353,9 @@ void f(void)
     report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
     table = report.to_dict()["testcase_table"]
 
-    assert table["input_columns"] == ["sensor_raw", "source_arr", "state"]
+    assert table["input_columns"] == ["sensor_raw", "source_arr", "source_arr", "state"]
+    assert table["input_column_keys"] == ["sensor_raw", "source_arr[0]", "source_arr[1]", "state"]
+    assert table["parameter_columns"] == []
     assert table["output_columns"] == ["output_flag"]
     assert "from_ptr" not in table["input_columns"]
     assert "from_call" not in table["input_columns"]
@@ -340,7 +370,8 @@ void f(void)
     assert any("traced sensor_raw -> p -> from_ptr -> from_call" in " ".join(row["notes"]) for row in call_rows)
 
     array_rows = rows_by_line[27]
-    assert {row["inputs"]["source_arr"] for row in array_rows} == {20, 21}
+    assert {row["inputs"]["source_arr[0]"] for row in array_rows} == {20, 21}
+    assert {row["inputs"]["source_arr[1]"] for row in array_rows} == {20, 21}
     assert any("traced source_arr -> from_arr" in " ".join(row["notes"]) for row in array_rows)
 
     field_rows = rows_by_line[30]

@@ -33,6 +33,8 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "btc_fill_toggle" in response.text
     assert "fill_manual_for_btc" in response.text
     assert "state.btcFillManual" in response.text
+    assert "parameter_columns" in response.text
+    assert "Parameters" in response.text
     assert '<input id="excel_format_version" type="text">' in response.text
     assert '<input id="excel_architecture" type="text">' in response.text
     assert '<input id="excel_scope" type="text">' in response.text
