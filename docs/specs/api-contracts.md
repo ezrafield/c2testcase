@@ -62,7 +62,11 @@ The response includes generated artifacts, downloads, and a `report`. The genera
     },
     "testcase_table": {
       "input_columns": ["a", "b", "flag"],
+      "parameter_columns": [],
       "output_columns": ["Decision_Result"],
+      "input_column_keys": ["a", "b", "flag"],
+      "parameter_column_keys": [],
+      "output_column_keys": ["Decision_Result"],
       "score": 1.0,
       "score_kind": "generated_target_score",
       "mcdc_complete": true,
@@ -76,6 +80,7 @@ The response includes generated artifacts, downloads, and a `report`. The genera
           "decision_id": "D1",
           "line": 1,
           "inputs": {"a": 1, "b": 9, "flag": false},
+          "parameters": {},
           "outputs": {"Decision_Result": true},
           "setup_status": "concrete",
           "setup_notes": [],
@@ -105,7 +110,9 @@ The response includes generated artifacts, downloads, and a `report`. The genera
 For ordinary C logic, `testcase_table` is derived from generated MC/DC cases:
 
 - input columns come from the target function parameters plus any manually supplied input variables.
+- parameter columns are empty for ordinary C logic unless an interface-specific table supplies them.
 - output columns come from manually supplied output variables, or `Decision_Result` when none are supplied.
+- `*_column_keys` are unique internal keys used when visible column labels repeat, especially for array variables.
 - each row is one generated testcase step.
 - `target_rows` counts generated MC/DC target rows.
 - `concrete_rows` counts rows where all input columns have concrete values.
@@ -115,11 +122,14 @@ For ordinary C logic, `testcase_table` is derived from generated MC/DC cases:
 
 For TargetLink-style generated C, the table uses the declared interface:
 
-- target function parameters and `EXT_SP_GLOBAL` declarations are input candidates.
+- target function parameters are parameter candidates.
+- `EXT_SP_GLOBAL` declarations are input candidates.
 - `$RAM_EXTERN$` declarations are not automatically inputs; they become input columns when decision conditions read them directly or through traced local assignments.
+- `$DATA_PUBLIC$` declarations are parameter candidates, and simple numeric initializers are copied into generated rows.
 - `$RAM_PUBLIC$`, `GLOBAL`, and globals written by the target function are output candidates.
 - local variables are traced to root globals where possible and are not emitted as table columns. The local data-flow pass handles simple assignments, function-call-derived locals, array reads, field reads, pointer aliases such as `p = &global`, and dereferences such as `local = *p`.
 - the same root variable may appear as both an input and an output when different conditions/assignments require it.
+- arrays expand into consecutive visible columns with the same label and unique keys such as `AF24ln_bgratiofi_s[0]`, `AF24ln_bgratiofi_s[1]`, and `AF24ln_bgratiofi_s[2]`.
 - `LOG_VAR` calls are used only as a fallback when declarations are not enough.
 - `tests/fixtures/c/result_template.md` is a sample of the desired table shape, not a limit on testcase count.
 - generated rows must still cover the extracted decisions well enough to reach the highest generated MC/DC score the tool can justify.
@@ -128,6 +138,8 @@ For TargetLink-style generated C, the table uses the declared interface:
 This interface analysis is designed for local CPU-only operation. It does not require internet access and does not use raw assembly as the primary representation because assembly loses source-level variable names. Future compiler-backed improvements should prefer Clang AST or LLVM IR with source/debug mapping when those tools are available locally.
 
 Reports include `interface_graph` as compact temporary trace evidence for the current report. It is used for testcase notes and `Ccode_interface` details; consumers should treat it as additive metadata and keep using `testcase_table` as the canonical table export source.
+
+See `docs/specs/testcase-table-interface-classification.md` for the full input/parameter/output classification rules.
 
 ### Web UI Views
 

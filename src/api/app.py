@@ -747,23 +747,40 @@ def render_index_html() -> str:
       const variables = state.report.testcase_table?.input_columns?.length
         ? state.report.testcase_table.input_columns
         : [...new Set([...(state.report.input_variables || []), ...[...new Set(rows.flatMap((row) => Object.keys(row.inputs || {})))].sort()])];
+      const variableKeys = state.report.testcase_table?.input_column_keys?.length
+        ? state.report.testcase_table.input_column_keys
+        : variables;
+      const parameterVariables = state.report.testcase_table?.parameter_columns || [];
+      const parameterKeys = state.report.testcase_table?.parameter_column_keys?.length
+        ? state.report.testcase_table.parameter_column_keys
+        : parameterVariables;
       const outputVariables = state.report.testcase_table?.output_columns?.length
         ? state.report.testcase_table.output_columns
         : (state.report.output_variables || []).length
         ? state.report.output_variables
         : ["Decision_Result"];
-      const btcFallbacks = manualValueFallbacks(rows, variables, outputVariables);
-      rows.sort((left, right) => compareTestcaseRows(left, right, variables));
+      const outputKeys = state.report.testcase_table?.output_column_keys?.length
+        ? state.report.testcase_table.output_column_keys
+        : outputVariables;
+      const btcFallbacks = manualValueFallbacks(rows, variableKeys, parameterKeys, outputKeys);
+      rows.sort((left, right) => compareTestcaseRows(left, right, variableKeys));
       const headers = [
         "Step",
         "Setup",
         ...variables,
+        ...parameterVariables,
         ...outputVariables,
       ];
       const table = document.createElement("table");
       const thead = table.createTHead();
       const groupRow = thead.insertRow();
-      ["Mode", "Setup", ...variables.map(() => "Inputs"), ...outputVariables.map(() => "Outputs")].forEach((label) => {
+      [
+        "Mode",
+        "Setup",
+        ...variables.map(() => "Inputs"),
+        ...parameterVariables.map(() => "Parameters"),
+        ...outputVariables.map(() => "Outputs"),
+      ].forEach((label) => {
         const th = document.createElement("th");
         th.textContent = label;
         groupRow.append(th);
@@ -777,19 +794,23 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
-        const assignments = variables.map((name) =>
-          btcCellValue(row.inputs?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL", btcFallbacks.inputs[name])
+        const assignments = variableKeys.map((key) =>
+          btcCellValue(row.inputs?.[key] ?? state.report.manual_inputs?.[key] ?? "MANUAL", btcFallbacks.inputs[key])
         );
-        const outputs = outputVariables.map((name) =>
+        const parameters = parameterKeys.map((key) =>
+          btcCellValue(row.parameters?.[key] ?? "MANUAL", btcFallbacks.parameters[key])
+        );
+        const outputs = outputKeys.map((key, index) =>
           btcCellValue(
-            row.outputs?.[name] ?? (name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL"),
-            btcFallbacks.outputs[name]
+            row.outputs?.[key] ?? (outputVariables[index] === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[key] ?? "MANUAL"),
+            btcFallbacks.outputs[key]
           )
         );
         const values = [
           index,
           setupLabel(row.setupStatus),
           ...assignments,
+          ...parameters,
           ...outputs,
         ];
         values.forEach((value, columnIndex) => {
@@ -911,6 +932,7 @@ def render_index_html() -> str:
         card.append(detailLine(`Setup: ${setupLabel(row.setupStatus)}`));
         card.append(detailLine(`Reason: ${formatReason(decision, row)}`));
         card.append(detailLine(`Inputs: ${formatMap(row.inputs)}`));
+        card.append(detailLine(`Parameters: ${formatMap(row.parameters)}`));
         card.append(detailLine(`Outputs: ${formatMap(row.outputs)}`));
         card.append(detailLine(`Condition values: ${formatConditionValues(decision, row)}`));
         graphTraceDetails(decision, row).forEach((line) => card.append(detailLine(line)));
@@ -950,19 +972,25 @@ def render_index_html() -> str:
       return entries.map(([name, value]) => `${name}=${value}`).join(", ");
     }
 
-    function manualValueFallbacks(rows, inputColumns, outputColumns) {
+    function manualValueFallbacks(rows, inputColumns, parameterColumns, outputColumns) {
       const fallbacks = {
         inputs: Object.fromEntries(inputColumns.map((name) => [name, 0])),
+        parameters: Object.fromEntries(parameterColumns.map((name) => [name, 0])),
         outputs: Object.fromEntries(outputColumns.map((name) => [name, 0])),
       };
       const collected = {
         inputs: Object.fromEntries(inputColumns.map((name) => [name, []])),
+        parameters: Object.fromEntries(parameterColumns.map((name) => [name, []])),
         outputs: Object.fromEntries(outputColumns.map((name) => [name, []])),
       };
       rows.forEach((row) => {
         inputColumns.forEach((name) => {
           const value = numericBtcValue(row.inputs?.[name] ?? state.report.manual_inputs?.[name]);
           if (value !== null) collected.inputs[name].push(value);
+        });
+        parameterColumns.forEach((name) => {
+          const value = numericBtcValue(row.parameters?.[name]);
+          if (value !== null) collected.parameters[name].push(value);
         });
         outputColumns.forEach((name) => {
           const value = numericBtcValue(
@@ -973,6 +1001,9 @@ def render_index_html() -> str:
       });
       inputColumns.forEach((name) => {
         if (collected.inputs[name].length) fallbacks.inputs[name] = Math.min(...collected.inputs[name]);
+      });
+      parameterColumns.forEach((name) => {
+        if (collected.parameters[name].length) fallbacks.parameters[name] = Math.min(...collected.parameters[name]);
       });
       outputColumns.forEach((name) => {
         if (collected.outputs[name].length) fallbacks.outputs[name] = Math.min(...collected.outputs[name]);
@@ -1033,6 +1064,7 @@ def render_index_html() -> str:
           covers: row.covers || [],
           values: row.mcdc_condition_values || [],
           inputs: row.inputs || {},
+          parameters: row.parameters || {},
           outputs: row.outputs || {},
           setupStatus: row.setup_status || "concrete",
           setupNotes: row.setup_notes || [],
@@ -1047,6 +1079,7 @@ def render_index_html() -> str:
           covers: row.covers || [],
           values: row.values || [],
           inputs: row.assignments || {},
+          parameters: {},
           outputs: {},
           setupStatus: row.assignments && Object.keys(row.assignments).length ? "concrete" : "manual_required",
           setupNotes: row.notes || [],

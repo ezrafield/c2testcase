@@ -86,7 +86,10 @@ class InterfaceAnalysis:
     ext_sp_globals: tuple[str, ...]
     global_outputs: tuple[str, ...]
     ram_public: tuple[str, ...]
+    data_public: tuple[str, ...]
     local_names: frozenset[str]
+    array_sizes: dict[str, int]
+    initial_values: dict[str, Any]
     assignment_sources: dict[str, tuple[str, ...]]
     assignment_targets: tuple[str, ...]
     condition_input_roots: tuple[str, ...]
@@ -513,39 +516,58 @@ def testcase_table_rows_from_dict(
 ) -> list[list[TableValue]]:
     table = report.get("testcase_table", {})
     input_columns = list(table.get("input_columns", []))
+    parameter_columns = list(table.get("parameter_columns", []))
     output_columns = list(table.get("output_columns", []))
+    input_keys = list(table.get("input_column_keys", input_columns))
+    parameter_keys = list(table.get("parameter_column_keys", parameter_columns))
+    output_keys = list(table.get("output_column_keys", output_columns))
     btc_fallbacks = manual_value_fallbacks(table) if fill_manual_for_btc else {"inputs": {}, "outputs": {}}
     group_headers = table.get(
         "group_headers",
-        ["Mode", *(["Inputs"] * len(input_columns)), *(["Outputs"] * len(output_columns))],
+        [
+            "Mode",
+            *(["Inputs"] * len(input_columns)),
+            *(["Parameters"] * len(parameter_columns)),
+            *(["Outputs"] * len(output_columns)),
+        ],
     )
     rows: list[list[TableValue]] = [
         list(group_headers),
-        ["Step", *input_columns, *output_columns],
+        ["Step", *input_columns, *parameter_columns, *output_columns],
     ]
     for row in table.get("rows", []):
         inputs = row.get("inputs", {})
+        parameters = row.get("parameters", {})
         outputs = row.get("outputs", {})
         input_values = [
             btc_cell_value(
-                inputs.get(name, "MANUAL"),
-                btc_fallbacks["inputs"].get(name, 0),
+                inputs.get(key, "MANUAL"),
+                btc_fallbacks["inputs"].get(key, 0),
                 fill_manual_for_btc,
             )
-            for name in input_columns
+            for key in input_keys
+        ]
+        parameter_values = [
+            btc_cell_value(
+                parameters.get(key, "MANUAL"),
+                btc_fallbacks.get("parameters", {}).get(key, 0),
+                fill_manual_for_btc,
+            )
+            for key in parameter_keys
         ]
         output_values = [
             btc_cell_value(
-                outputs.get(name, "MANUAL"),
-                btc_fallbacks["outputs"].get(name, 0),
+                outputs.get(key, "MANUAL"),
+                btc_fallbacks["outputs"].get(key, 0),
                 fill_manual_for_btc,
             )
-            for name in output_columns
+            for key in output_keys
         ]
         rows.append(
             [
                 row.get("step", len(rows) - 2),
                 *input_values,
+                *parameter_values,
                 *output_values,
             ]
         )
@@ -555,6 +577,7 @@ def testcase_table_rows_from_dict(
             [
                 "No generated testcases",
                 *([empty_value] * len(input_columns)),
+                *([empty_value] * len(parameter_columns)),
                 *([empty_value] * len(output_columns)),
             ]
         )
@@ -563,13 +586,22 @@ def testcase_table_rows_from_dict(
 
 def manual_value_fallbacks(table: dict[str, Any]) -> dict[str, dict[str, TableValue]]:
     input_columns = list(table.get("input_columns", []))
+    parameter_columns = list(table.get("parameter_columns", []))
     output_columns = list(table.get("output_columns", []))
+    input_keys = list(table.get("input_column_keys", input_columns))
+    parameter_keys = list(table.get("parameter_column_keys", parameter_columns))
+    output_keys = list(table.get("output_column_keys", output_columns))
     values: dict[str, dict[str, list[TableValue]]] = {
-        "inputs": {name: [] for name in input_columns},
-        "outputs": {name: [] for name in output_columns},
+        "inputs": {name: [] for name in input_keys},
+        "parameters": {name: [] for name in parameter_keys},
+        "outputs": {name: [] for name in output_keys},
     }
     for row in table.get("rows", []):
-        for group_name, columns in (("inputs", input_columns), ("outputs", output_columns)):
+        for group_name, columns in (
+            ("inputs", input_keys),
+            ("parameters", parameter_keys),
+            ("outputs", output_keys),
+        ):
             row_values = row.get(group_name, {})
             if not isinstance(row_values, dict):
                 continue
@@ -613,22 +645,41 @@ def btc_numeric_value(value: Any) -> TableValue | None:
 
 def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
     table = testcase_table(report)
+    input_columns = list(table["input_columns"])
+    parameter_columns = list(table.get("parameter_columns", []))
+    output_columns = list(table["output_columns"])
+    input_keys = list(table.get("input_column_keys", input_columns))
+    parameter_keys = list(table.get("parameter_column_keys", parameter_columns))
+    output_keys = list(table.get("output_column_keys", output_columns))
     rows: list[list[TableValue]] = [
         table.get(
             "group_headers",
-            ["Mode", *(["Inputs"] * len(table["input_columns"])), *(["Outputs"] * len(table["output_columns"]))],
+            [
+                "Mode",
+                *(["Inputs"] * len(input_columns)),
+                *(["Parameters"] * len(parameter_columns)),
+                *(["Outputs"] * len(output_columns)),
+            ],
         ),
-        ["Step", *table["input_columns"], *table["output_columns"]],
+        ["Step", *input_columns, *parameter_columns, *output_columns],
     ]
     if table["rows"]:
         for row in table["rows"]:
-            rows.append([row["step"], *row["inputs"].values(), *row["outputs"].values()])
+            rows.append(
+                [
+                    row["step"],
+                    *(row.get("inputs", {}).get(key, "MANUAL") for key in input_keys),
+                    *(row.get("parameters", {}).get(key, "MANUAL") for key in parameter_keys),
+                    *(row.get("outputs", {}).get(key, "MANUAL") for key in output_keys),
+                ]
+            )
         return rows
     rows.append(
         [
             "No generated testcases",
-            *(["MANUAL"] * len(table["input_columns"])),
-            *(["MANUAL"] * len(table["output_columns"])),
+            *(["MANUAL"] * len(input_columns)),
+            *(["MANUAL"] * len(parameter_columns)),
+            *(["MANUAL"] * len(output_columns)),
         ]
     )
     return rows
@@ -680,7 +731,11 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
             step_index += 1
     return {
         "input_columns": variable_names,
+        "parameter_columns": [],
         "output_columns": output_names,
+        "input_column_keys": variable_names,
+        "parameter_column_keys": [],
+        "output_column_keys": output_names,
         "score": round(report.score, 4),
         "score_kind": "generated_target_score",
         "mcdc_complete": report.score == 1.0,
@@ -694,11 +749,15 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
     if interface is None:
         return None
 
-    input_names, output_names = interface
+    input_names, parameter_names, output_names, array_sizes, initial_values = interface
     output_names = targetlink_output_order(output_names)
-    testcase_inputs = targetlink_mcdc_interface_inputs(report, input_names, output_names)
+    input_columns, input_keys = expand_interface_columns(input_names, array_sizes)
+    parameter_columns, parameter_keys = expand_interface_columns(parameter_names, array_sizes)
+    output_columns, output_keys = expand_interface_columns(output_names, array_sizes)
+    controllable_names = [*parameter_names, *input_names]
+    testcase_inputs = targetlink_mcdc_interface_inputs(report, controllable_names, output_names)
     if testcase_inputs is None:
-        testcase_inputs = targetlink_generic_interface_inputs(report, input_names)
+        testcase_inputs = targetlink_generic_interface_inputs(report, controllable_names)
     if testcase_inputs is None:
         return None
 
@@ -707,15 +766,27 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
     for step_index, scenario in enumerate(testcase_inputs):
         inputs = scenario["inputs"]
         output_state.update(evaluate_targetlink_outputs(inputs, output_state))
-        row_inputs = {name: inputs.get(name, "MANUAL") for name in input_names}
-        setup_status, setup_notes = testcase_setup_status(row_inputs, input_names, scenario["notes"])
+        row_inputs = expand_interface_values(input_names, input_keys, array_sizes, inputs)
+        row_parameters = expand_interface_values(
+            parameter_names,
+            parameter_keys,
+            array_sizes,
+            merge_concrete_values(initial_values, inputs),
+        )
+        row_outputs = expand_interface_values(output_names, output_keys, array_sizes, output_state)
+        setup_status, setup_notes = testcase_setup_status(
+            {**row_inputs, **row_parameters},
+            [*input_keys, *parameter_keys],
+            scenario["notes"],
+        )
         rows.append(
             {
                 "step": step_index,
                 "decision_id": scenario["decision_id"],
                 "line": scenario["line"],
                 "inputs": row_inputs,
-                "outputs": {name: output_state.get(name, "MANUAL") for name in output_names},
+                "parameters": row_parameters,
+                "outputs": row_outputs,
                 "setup_status": setup_status,
                 "setup_notes": setup_notes,
                 "mcdc_condition_values": scenario["mcdc_condition_values"],
@@ -726,9 +797,13 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
         )
 
     return {
-        "input_columns": input_names,
-        "output_columns": output_names,
-        "group_headers": targetlink_group_headers(input_names, output_names),
+        "input_columns": input_columns,
+        "parameter_columns": parameter_columns,
+        "output_columns": output_columns,
+        "input_column_keys": input_keys,
+        "parameter_column_keys": parameter_keys,
+        "output_column_keys": output_keys,
+        "group_headers": targetlink_group_headers(input_columns, parameter_columns, output_columns),
         "score": round(report.score, 4),
         "score_kind": "generated_target_score",
         "mcdc_complete": report.score == 1.0,
@@ -737,11 +812,61 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
     }
 
 
-def targetlink_group_headers(input_names: list[str], output_names: list[str]) -> list[str]:
+def expand_interface_columns(names: list[str], array_sizes: dict[str, int]) -> tuple[list[str], list[str]]:
+    labels: list[str] = []
+    keys: list[str] = []
+    for name in names:
+        width = array_sizes.get(name, 1)
+        if width <= 1:
+            labels.append(name)
+            keys.append(name)
+            continue
+        for index in range(width):
+            labels.append(name)
+            keys.append(f"{name}[{index}]")
+    return labels, keys
+
+
+def expand_interface_values(
+    names: list[str],
+    keys: list[str],
+    array_sizes: dict[str, int],
+    values: dict[str, Any],
+) -> dict[str, TableValue]:
+    expanded: dict[str, TableValue] = {}
+    key_index = 0
+    for name in names:
+        width = array_sizes.get(name, 1)
+        root_value = values.get(name, "MANUAL")
+        for array_index in range(width):
+            key = keys[key_index]
+            value = values.get(key, root_value)
+            if isinstance(root_value, (list, tuple)) and array_index < len(root_value):
+                value = root_value[array_index]
+            expanded[key] = value
+            key_index += 1
+    return expanded
+
+
+def merge_concrete_values(defaults: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(defaults)
+    for name, value in overrides.items():
+        if value != "MANUAL":
+            merged[name] = value
+    return merged
+
+
+def targetlink_group_headers(
+    input_names: list[str],
+    parameter_names: list[str],
+    output_names: list[str],
+) -> list[str]:
     return [
         "Mode",
         "Inputs",
         *([" "] * max(len(input_names) - 1, 0)),
+        *(["Parameters"] if parameter_names else []),
+        *([" "] * max(len(parameter_names) - 1, 0)),
         "Outputs",
         *([" "] * max(len(output_names) - 1, 0)),
     ]
@@ -774,7 +899,7 @@ def testcase_setup_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def extract_log_var_interface(source: str) -> tuple[list[str], list[str]] | None:
+def extract_log_var_interface(source: str) -> tuple[list[str], list[str], list[str], dict[str, int], dict[str, Any]] | None:
     declared_interface = extract_targetlink_declared_interface(source)
     if declared_interface is not None:
         return declared_interface
@@ -793,33 +918,35 @@ def extract_log_var_interface(source: str) -> tuple[list[str], list[str]] | None
     output_names = list(dict.fromkeys(name for name in output_names if name not in input_names))
     if not input_names or not output_names:
         return None
-    return input_names, output_names
+    return input_names, [], output_names, {}, {}
 
 
-def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str]] | None:
+def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str], list[str], dict[str, int], dict[str, Any]] | None:
     analysis = analyze_c_interface(source)
+    parameter_names = list(dict.fromkeys((*analysis.function_parameters, *analysis.data_public)))
+    parameter_set = set(parameter_names)
     input_names = list(
         dict.fromkeys(
-            (
-                *analysis.function_parameters,
-                *analysis.ext_sp_globals,
-                *analysis.condition_input_roots,
-            )
+            name
+            for name in (*analysis.ext_sp_globals, *analysis.condition_input_roots)
+            if name not in parameter_set
         )
     )
     output_names = list(
         dict.fromkeys(
-            (
+            name
+            for name in (
                 *analysis.global_outputs,
                 *analysis.ram_public,
                 *analysis.assignment_targets,
                 *analysis.condition_output_roots,
             )
+            if name not in parameter_set
         )
     )
     if not input_names or not output_names:
         return None
-    return input_names, output_names
+    return input_names, parameter_names, output_names, dict(analysis.array_sizes), dict(analysis.initial_values)
 
 
 def analyze_c_interface(source: str) -> InterfaceAnalysis:
@@ -828,7 +955,8 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
     function_start = first_function_definition_start(clean_source)
     top_level_source = clean_source[:function_start] if function_start is not None else clean_source
     function_source = clean_source[function_start or 0 :]
-    global_order, section_by_name = extract_top_level_variables(source, top_level_source)
+    global_order, section_by_name, array_sizes = extract_top_level_variables(source, top_level_source)
+    initial_values = extract_top_level_initial_values(source, global_order)
     global_names = set(global_order)
     local_names = frozenset(extract_local_variables(function_source, global_names))
     assignment_sources, assignment_targets = extract_assignment_dependencies(function_source, global_names, set(function_parameters))
@@ -869,6 +997,7 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
     ext_sp_globals = [name for name in global_order if section_by_name.get(name) == "EXT_SP_GLOBAL"]
     global_outputs = [name for name in global_order if section_by_name.get(name) == "GLOBAL"]
     ram_public = [name for name in global_order if section_by_name.get(name) == "RAM_PUBLIC"]
+    data_public = [name for name in global_order if section_by_name.get(name) == "DATA_PUBLIC"]
     ordered_assignment_targets = [name for name in global_order if name in assignment_targets]
 
     return InterfaceAnalysis(
@@ -877,7 +1006,10 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
         ext_sp_globals=tuple(ext_sp_globals),
         global_outputs=tuple(global_outputs),
         ram_public=tuple(ram_public),
+        data_public=tuple(data_public),
         local_names=local_names,
+        array_sizes=dict(array_sizes),
+        initial_values=initial_values,
         assignment_sources=assignment_sources,
         assignment_targets=tuple(ordered_assignment_targets),
         condition_input_roots=tuple(order_known_roots(condition_input_roots, global_order, function_parameters)),
@@ -895,7 +1027,7 @@ def first_function_definition_start(source: str) -> int | None:
     return None
 
 
-def extract_top_level_variables(original_source: str, top_level_source: str) -> tuple[tuple[str, ...], dict[str, str]]:
+def extract_top_level_variables(original_source: str, top_level_source: str) -> tuple[tuple[str, ...], dict[str, str], dict[str, int]]:
     section_by_line: dict[int, str] = {}
     current_section = ""
     for line_number, line in enumerate(original_source.splitlines(), start=1):
@@ -906,8 +1038,9 @@ def extract_top_level_variables(original_source: str, top_level_source: str) -> 
 
     names: list[str] = []
     sections: dict[str, str] = {}
+    array_sizes: dict[str, int] = {}
     declaration_pattern = re.compile(
-        r"^\s*(extern\s+)?(?:(GLOBAL|EXT_SP_GLOBAL)\s+)?(?:[A-Za-z_]\w*\s+)+\**([A-Za-z_]\w*)\s*(?:\[|=|;)"
+        r"^\s*(extern\s+)?(?:(GLOBAL|EXT_SP_GLOBAL)\s+)?(?:[A-Za-z_]\w*\s+)+\**([A-Za-z_]\w*)\s*(?:\[\s*(\d+)\s*\])?\s*(?:=|;)"
     )
     for line_number, line in enumerate(top_level_source.splitlines(), start=1):
         stripped = line.strip()
@@ -921,9 +1054,39 @@ def extract_top_level_variables(original_source: str, top_level_source: str) -> 
             continue
         section = match.group(2) or section_by_line.get(line_number, "")
         names.append(name)
+        if match.group(4):
+            array_sizes[name] = int(match.group(4))
         if section:
             sections[name] = section
-    return tuple(dict.fromkeys(names)), sections
+    return tuple(dict.fromkeys(names)), sections, array_sizes
+
+
+def extract_top_level_initial_values(source: str, names: tuple[str, ...]) -> dict[str, Any]:
+    initial_values: dict[str, Any] = {}
+    for name in names:
+        array_match = re.search(rf"\b{name}\s*\[[^\]]+\]\s*=\s*\{{(?P<body>.*?)\}}\s*;", source, re.DOTALL)
+        if array_match:
+            values = [
+                parse_initializer_literal(part.strip())
+                for part in array_match.group("body").replace("\n", " ").split(",")
+                if part.strip()
+            ]
+            if values and all(value is not None for value in values):
+                initial_values[name] = values
+            continue
+        scalar_match = re.search(rf"\b{name}\s*=\s*(?P<value>[^;]+);", source)
+        if scalar_match:
+            value = parse_initializer_literal(scalar_match.group("value").strip())
+            if value is not None:
+                initial_values[name] = value
+    return initial_values
+
+
+def parse_initializer_literal(value: str) -> TableValue | None:
+    cleaned = value.strip().strip("()")
+    if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[fFlLuU]*", cleaned):
+        return parse_c_numeric_literal(cleaned)
+    return None
 
 
 def extract_local_variables(function_source: str, global_names: set[str]) -> set[str]:

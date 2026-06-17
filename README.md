@@ -107,11 +107,15 @@ For ordinary C logic:
 
 For TargetLink/autocode-style C:
 
-- target function parameters and `EXT_SP_GLOBAL` declarations are input candidates.
+- `EXT_SP_GLOBAL` and decision-read `$RAM_EXTERN$` roots are input candidates.
+- target function parameters and `$DATA_PUBLIC$` calibration/static data are parameter candidates.
 - `$RAM_EXTERN$` declarations are **not** automatically inputs.
 - `$RAM_PUBLIC$`, `GLOBAL`, and globals written by the function are output candidates.
 - local variables are traced to root globals where possible and are not emitted as columns.
 - a variable can be both input and output if it is both read for decisions and written by the function.
+- arrays expand into consecutive columns. Visible labels repeat, while JSON uses unique keys like `AF24ln_bgratiofi_s[0]`.
+
+The detailed classification rules live in `docs/specs/testcase-table-interface-classification.md`.
 
 Rows include setup readiness:
 
