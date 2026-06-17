@@ -12,10 +12,10 @@ For TargetLink-style C, the classifier reads top-level declarations, section com
 
 ### Inputs
 
-A variable is an input when it is a runtime root value used by a decision:
+A variable is an input when it is a runtime root value supplied from outside the function/module:
 
 - Function-external signal declarations such as `EXT_SP_GLOBAL`.
-- `$RAM_EXTERN$` variables when decision conditions read them directly or through traced local assignments.
+- `$RAM_EXTERN$` variables, even when they are not used directly in a decision condition.
 - `$RAM_PUBLIC$` variables when they are read by a decision before or while also being written.
 
 Local variables are not input columns. The graph traces locals back to their root variables.
@@ -29,6 +29,22 @@ if (Sa2_bgratiof_s_ > 8.F) { ... }
 ```
 
 The table input is `VF24bgratiof_s`, not `Sa2_bgratiof_s_`.
+
+Runtime externs are still inputs when they affect fallback outputs outside MC/DC conditions:
+
+```c
+extern VU16 VU16rsh;
+VU16 VU16ln_rsh;
+
+if (enabled) {
+   VU16ln_rsh = calculated_value;
+}
+else {
+   VU16ln_rsh = VU16rsh;
+}
+```
+
+`VU16rsh` is an input because the output `VU16ln_rsh` can take its value when the logic does nothing else. If no condition constrains `VU16rsh`, testcase rows keep it as `MANUAL`.
 
 ### Parameters
 

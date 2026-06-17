@@ -285,6 +285,7 @@ def test_targetlink_table_traces_condition_locals_to_root_interface_variables() 
     assert "Sa2_bgratiof_s_" not in table["input_columns"]
     assert "Sa4_Sum2" not in table["input_columns"]
     assert "VF24bgratiof_s" in table["input_columns"]
+    assert "VU16rsh" in table["input_columns"]
     assert table["input_columns"].count("AF24ln_bgratiofi_s") == 3
     assert table["input_column_keys"][table["input_columns"].index("AF24ln_bgratiofi_s")] == "AF24ln_bgratiofi_s[0]"
     assert table["output_columns"].count("AF24ln_bgratiofi_s") == 3
@@ -294,6 +295,8 @@ def test_targetlink_table_traces_condition_locals_to_root_interface_variables() 
     ratio_rows = [row for row in table["rows"] if row["line"] in {437, 442}]
     assert ratio_rows
     assert {row["inputs"]["VF24bgratiof_s"] for row in ratio_rows} >= {-1.0, 0.0, 8.0, 9.0}
+    assert all("VU16rsh" in row["inputs"] for row in table["rows"])
+    assert all(row["inputs"]["VU16rsh"] == "MANUAL" for row in table["rows"])
     assert all("Sa2_bgratiof_s_" not in row["inputs"] for row in ratio_rows)
     assert any("traced VF24bgratiof_s -> Sa2_bgratiof_s_" in " ".join(row["notes"]) for row in ratio_rows)
 
@@ -526,6 +529,36 @@ def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> No
     assert "Comment" in sheet_xml
     assert "<mergeCells" in sheet_xml
     assert 'topLeftCell="A7"' in sheet_xml
+
+
+def test_excel_export_styles_inputs_parameters_outputs_sections(tmp_path: Path) -> None:
+    output_path = tmp_path / "sections.xlsx"
+
+    write_testcase_workbook_rows(
+        [
+            ["Mode", "Inputs", "Parameters", "Outputs"],
+            ["Step", "input_a", "cal_a", "output_y"],
+            [0, 1, 2, 3],
+        ],
+        output_path,
+        ExcelExportMetadata(name="Section_Test"),
+        normalize_with_libreoffice=False,
+    )
+
+    with ZipFile(output_path) as workbook:
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        styles_xml = workbook.read("xl/styles.xml").decode()
+
+    assert 'count="10"' in styles_xml
+    assert "Parameters" in sheet_xml
+    assert 'r="B5" t="inlineStr" s="2"' in sheet_xml
+    assert 'r="C5" t="inlineStr" s="4"' in sheet_xml
+    assert 'r="D5" t="inlineStr" s="3"' in sheet_xml
+    assert 'r="E5" t="inlineStr" s="8"' in sheet_xml
+    assert 'r="B6" t="inlineStr" s="5"' in sheet_xml
+    assert 'r="C6" t="inlineStr" s="9"' in sheet_xml
+    assert 'r="D6" t="inlineStr" s="6"' in sheet_xml
+    assert 'r="E6" t="inlineStr" s="7"' in sheet_xml
 
 
 def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
