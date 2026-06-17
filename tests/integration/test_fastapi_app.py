@@ -29,6 +29,10 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "Excel Architecture" in response.text
     assert "Excel Scope" in response.text
     assert "Excel Name" in response.text
+    assert "BTC fill MANUAL: off" in response.text
+    assert "btc_fill_toggle" in response.text
+    assert "fill_manual_for_btc" in response.text
+    assert "state.btcFillManual" in response.text
     assert '<input id="excel_format_version" type="text">' in response.text
     assert '<input id="excel_architecture" type="text">' in response.text
     assert '<input id="excel_scope" type="text">' in response.text
@@ -45,6 +49,11 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "overflow: hidden;" in response.text
     assert "height: 100%;" in response.text
     assert "report.testcase_table?.rows?.length" in response.text
+    assert "graphTraceDetails" in response.text
+    assert "Graph trace: root input" in response.text
+    assert "setupLabel" in response.text
+    assert "manual required" in response.text
+    assert "targets /" in response.text
 
 
 def test_web_app_generates_mcdc_artifacts() -> None:
@@ -80,6 +89,11 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     assert payload["report"]["output_variables"] == ["VF24blatgfd_s", "VS15lat_grev"]
     assert payload["report"]["manual_outputs"] == {"VF24blatgfd_s": -24.5, "VS15lat_grev": -2.5}
     assert payload["report"]["mcdc_complete"] is True
+    assert payload["report"]["interface_graph"]["nodes"]
+    assert payload["report"]["interface_graph"]["edges"]
+    assert payload["report"]["interface_graph"]["condition_traces"]
+    assert payload["report"]["testcase_table"]["target_rows"] == len(payload["report"]["testcase_table"]["rows"])
+    assert payload["report"]["testcase_table"]["concrete_rows"] == len(payload["report"]["testcase_table"]["rows"])
     assert payload["report"]["testcase_table"]["input_columns"] == ["a", "b", "flag", "expected", "IN_gear"]
     assert payload["report"]["testcase_table"]["output_columns"] == ["VF24blatgfd_s", "VS15lat_grev"]
     assert payload["report"]["testcase_table"]["mcdc_complete"] is True
@@ -90,6 +104,7 @@ def test_web_app_generates_mcdc_artifacts() -> None:
         "expected",
         "IN_gear",
     }
+    assert payload["report"]["testcase_table"]["rows"][0]["setup_status"] == "concrete"
     assert "coverage_ready" in payload["report"]
     assert "coverage_status" in payload["report"]
     assert "toolchain_details" in payload["report"]
@@ -150,3 +165,34 @@ def test_web_app_exports_excel_with_user_metadata() -> None:
     assert "Example Architecture [C-Code]" in sheet_xml
     assert "logic.c:1:logic" in sheet_xml
     assert "SIL_SV_ATG_2" in sheet_xml
+
+
+def test_web_app_exports_excel_with_btc_manual_fill() -> None:
+    client = TestClient(app)
+
+    export_response = client.post(
+        "/api/export-excel",
+        json={
+            "report": {
+                "testcase_table": {
+                    "input_columns": ["a", "b", "missing"],
+                    "output_columns": ["y"],
+                    "rows": [
+                        {"inputs": {"a": "MANUAL", "b": 5, "missing": "MANUAL"}, "outputs": {"y": "MANUAL"}},
+                        {"inputs": {"a": -2, "b": "MANUAL", "missing": "MANUAL"}, "outputs": {"y": 1}},
+                    ],
+                }
+            },
+            "name": "BTC_READY",
+            "fill_manual_for_btc": True,
+        },
+    )
+    export_payload = export_response.json()
+
+    assert export_response.status_code == 200
+    assert export_payload["filename"] == "BTC_READY.xlsx"
+    with ZipFile(BytesIO(base64.b64decode(export_payload["download"]))) as workbook:
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+    assert "MANUAL" not in sheet_xml
+    assert "-2" in sheet_xml
+    assert "<v>0</v>" in sheet_xml

@@ -1,42 +1,53 @@
 # c2testcase
 
-c2testcase is a local, CPU-friendly starter pipeline for generating best-effort MC/DC testcase targets from a C source file.
+`c2testcase` is a local, CPU-friendly MC/DC testcase generation tool for C source files.
 
-It currently extracts `if` and `while` decisions, splits boolean conditions, enumerates independence pairs, and emits:
+It extracts C decisions, generates best-effort MC/DC target rows, builds a first-class `Testcase_table`, exports BTC/SIL-style Excel workbooks, and provides a web UI that links highlighted C source lines to testcase evidence.
 
-- `mcdc_cases.json`: decision targets, selected MC/DC rows, inferred simple inputs, and warnings.
-- `mcdc_testcases.xlsx`: testcase rows with `TC1`, `TC2`, etc. and one column per inferred input.
-- `generated_mcdc_tests.c`: a harness scaffold to adapt to the function under test.
-- `gap_report.md`: score, local tool availability, and gap classifications.
+The project is deterministic and dependency-light. It does **not** claim compiler-confirmed 100% MC/DC for arbitrary C. It separates generated MC/DC target coverage from executable/concrete testcase readiness so gaps stay visible instead of being hidden behind guessed inputs.
 
-This is intentionally deterministic and dependency-light. It does not claim 100% MC/DC for arbitrary C; it reports coupled, oversized, or manually-bound cases so they can be closed with harness work, exclusions, or a future symbolic/coverage backend.
+## What It Produces
 
-## Getting Started
+Given a `.c` file and optional headers, the tool emits:
+
+- `mcdc_cases.json`: full report JSON, including decisions, cases, `testcase_table`, `interface_graph`, toolchain readiness, warnings, and gap information.
+- `mcdc_testcases.xlsx`: Excel workbook generated from `Testcase_table`.
+- `generated_mcdc_tests.c`: harness scaffold with generated setup comments.
+- `gap_report.md`: generated target score, toolchain readiness, warnings, and coverage gaps.
+
+The web UI additionally provides:
+
+- `Testcase_table`: input/output columns and testcase rows.
+- `Export Excel`: a metadata form for `Format Version`, `Architecture`, `Scope`, and `Name`; export uses the current `Testcase_table`.
+- `BTC fill MANUAL`: a toggle that replaces displayed/exported `MANUAL` cells with BTC-friendly fallback values.
+- `Ccode_interface`: split C source/detail view showing highlighted decision lines, testcase steps, reasons, input/output values, graph traces, and setup notes.
+
+## Install
+
 ```powershell
 python -m venv .c2testcases
 .\.c2testcases\Scripts\python.exe -m pip install -r requirements.txt
+.\.c2testcases\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Run tests:
+
+```powershell
 .\.c2testcases\Scripts\python.exe -m pytest tests/unit tests/integration
 ```
 
-Generate cases:
+## CLI Usage
+
+Generate MC/DC target artifacts:
 
 ```powershell
-c2testcase path\to\file.c --header path\to\file.h -I path\to\includes --target-function my_func --input-variable IN_gear=D,IN_ignition=1 --output-variable VF24blatgfd_s=-24.5,VS15lat_grev=-2.5 --mcdc-mode masking -o build\mcdc
+.\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c --header path\to\file.h --target-function my_func --mcdc-mode masking -o build\mcdc
 ```
 
-Open `build\mcdc\mcdc_testcases.xlsx` to see testcase vectors in a BTC/SIL-style table. Input columns are detected from the target C function parameters. Add `--input-variable name=value` only for extra setup columns or baseline values. Output baseline columns come from `--output-variable`. Generated condition values override input defaults when inferred. Missing values are marked `MANUAL`, never left blank:
-
-```text
-Mode  Inputs        Outputs
-Step  a  b  c       VF24blatgfd_s  VS15lat_grev
-0     1  2  3       -24.5          -2.5
-1     0  2  2       -24.5          -2.5
-```
-
-Without installation, use:
+With manual setup columns/defaults:
 
 ```powershell
-.\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c -o build\mcdc
+.\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c --target-function my_func --input-variable IN_gear=D,IN_ignition=1 --output-variable VF24blatgfd_s=-24.5,VS15lat_grev=-2.5 --mcdc-mode masking -o build\mcdc
 ```
 
 Compiler flags that start with `-` should use the equals form:
@@ -45,55 +56,168 @@ Compiler flags that start with `-` should use the equals form:
 .\.c2testcases\Scripts\python.exe -m src.cli path\to\file.c --compile-flag=-DUNIT_TEST -o build\mcdc
 ```
 
+After editable install, `c2testcase` is also available as a console script:
+
+```powershell
+c2testcase path\to\file.c --target-function my_func -o build\mcdc
+```
+
 Supported generated target modes:
 
-- `unique-cause`: strict default.
-- `masking`: allows masked/coupled variations for a higher achievable generated score.
-- `multicondition`: enumerates feasible truth combinations up to the cap.
+- `unique-cause`: strict MC/DC target generation.
+- `masking`: allows masked/coupled variations where valid.
+- `multicondition`: enumerates feasible truth combinations up to the configured cap.
 
-Current harder fixture-corpus generated scores:
+## Web UI
 
-- Unique-Cause: `0.9513`
-- Masking: `1.0`
-- Multicondition: `0.8571`
+Start the local FastAPI app:
 
-The corpus includes MBD/autocode, hardware register, HIL diagnostic, architecture lifecycle, unit/integration, and system acceptance examples under `tests/fixtures/c/`.
+```powershell
+.\.c2testcases\Scripts\python.exe -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Workflow:
+
+1. Upload a `.c` file and optional `.h` files.
+2. Choose target function and MC/DC mode.
+3. Generate cases.
+4. Inspect `Testcase_table`.
+5. Use `Ccode_interface` to inspect which testcase rows cover each highlighted decision line.
+6. Optional: turn on `BTC fill MANUAL` when the workbook must avoid literal `MANUAL` cells for BTC Embedded import.
+7. Click `Export Excel`, fill the four metadata fields, then export the workbook.
+
+The Excel filename and worksheet name come from the export `Name` field.
+
+## Testcase Table Semantics
+
+`Testcase_table` is the canonical tabular output used by the UI and Excel export.
+
+For ordinary C logic:
+
+- input columns come from target function parameters plus manual input variables.
+- output columns come from manual output variables, or `Decision_Result` when none are supplied.
+
+For TargetLink/autocode-style C:
+
+- target function parameters and `EXT_SP_GLOBAL` declarations are input candidates.
+- `$RAM_EXTERN$` declarations are **not** automatically inputs.
+- `$RAM_PUBLIC$`, `GLOBAL`, and globals written by the function are output candidates.
+- local variables are traced to root globals where possible and are not emitted as columns.
+- a variable can be both input and output if it is both read for decisions and written by the function.
+
+Rows include setup readiness:
+
+- `target_rows`: generated MC/DC target rows.
+- `concrete_rows`: rows where every input column has a concrete value.
+- `partial_rows`: rows where some input values still require manual setup.
+- `manual_required_rows`: rows where no concrete root input values were inferred.
+- row-level `setup_status`: `concrete`, `partial`, or `manual_required`.
+- row-level `setup_notes`: why setup is incomplete.
+
+A full-`MANUAL` row is **not** an executable testcase yet. It is MC/DC target evidence: the tool knows which decision truth vector is needed, but cannot safely choose concrete root inputs.
+
+Example:
+
+```c
+mixed = a + b;
+if (mixed > 5U) { ... }
+```
+
+Many input pairs can satisfy `mixed > 5U`, so the tool keeps `a` and `b` as `MANUAL` and marks the row `manual_required` rather than guessing.
+
+The `BTC fill MANUAL` toggle is only an export/display compatibility layer. When it is on, each `MANUAL` cell is replaced by the smallest numeric value already present in the same input/output column. If the column has no numeric value, the fallback is `0`. The underlying report still keeps `setup_status`, `setup_notes`, and original unresolved reasoning so manual setup risk remains visible.
+
+## Interface Graph
+
+Reports include an in-memory/source-level `interface_graph` serialized into `mcdc_cases.json`.
+
+The graph is compact temporary trace evidence for the current report:
+
+- nodes: globals, params, locals, fields, arrays, pointers, conditions, assignments, outputs.
+- edges: `derived_from`, `aliases`, `reads_from`, `writes_to`, `condition_uses`.
+- condition traces: root inputs and chain from root variable to condition variable.
+
+Examples:
+
+```text
+VF24bgratiof_s -> Sa2_bgratiof_s_
+sensor_raw -> p -> from_ptr -> from_call
+source_arr -> from_arr
+state -> state.ready
+```
+
+`Ccode_interface` uses these traces to explain why a testcase row uses a root input for a condition.
+
+Ambiguous multi-root traces remain manual:
+
+```text
+a, b -> mixed
+MANUAL: ambiguous roots [a, b] for `mixed`.
+```
 
 ## Practical Scope
 
-Works best for pure logic such as:
+Works best for:
 
-- Primitive integer and boolean inputs.
-- Bounded expressions with `&&`, `||`, `!`, and simple comparisons.
-- C files that can later be compiled with a small hand-written harness.
+- C decisions in `if` and `while`.
+- integer, float, and boolean comparisons.
+- local assignment chains.
+- arrays and fields at root-variable level.
+- simple pointer aliases such as `p = &global` and `local = *p`.
+- function-call-derived locals where inputs can be traced to arguments.
+- TargetLink/autocode-style global interfaces.
 
-Hard cases need extra setup:
+Hard cases still need harness work or future solver/compiler support:
 
-- Pointers, structs, globals, hardware registers, volatile state, callbacks, and external calls.
-- Loops or decisions with many conditions.
-- Unreachable defensive code or strongly coupled conditions.
+- ambiguous pointer aliasing.
+- deep structs/pointers.
+- external callbacks and hardware state.
+- complex macro-generated control flow.
+- loops requiring bounds.
+- unreachable/defensive code.
+
+The next deeper layer should be local Clang AST or LLVM IR with source/debug mapping. Raw assembly is not the preferred primary representation because it loses source variable names.
 
 ## Local Commands
 
 ```powershell
 .\.c2testcases\Scripts\python.exe -m src.cli tests\fixtures\c\simple_logic.c --target-function logic -o build\mcdc-smoke
-.\.c2testcases\Scripts\python.exe scripts\run_llvm_mcdc_coverage.py tests\fixtures\c\simple_logic.c --target-function logic --output-dir build\llvm-mcdc\simple_logic --mcdc-mode masking
-.\.c2testcases\Scripts\python.exe scripts\evaluate_llvm_mcdc_fixtures.py
+.\.c2testcases\Scripts\python.exe scripts\evaluate_mcdc_fixtures.py
 .\.c2testcases\Scripts\python.exe -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000
 .\.c2testcases\Scripts\python.exe -m compileall src tests
-.\.c2testcases\Scripts\python.exe scripts\evaluate_mcdc_fixtures.py
 ```
 
-Open the local UI at `http://127.0.0.1:8000`.
+LLVM coverage helpers are available for supported simple signatures:
 
-The LLVM coverage runner is currently scoped to scalar functions where generated cases can be called directly. It emits `llvm_mcdc_report.txt`, `mcdc.profdata`, the executable harness, and `coverage_result.json` with confirmed MC/DC percentages.
+```powershell
+.\.c2testcases\Scripts\python.exe scripts\run_llvm_mcdc_coverage.py tests\fixtures\c\simple_logic.c --target-function logic --output-dir build\llvm-mcdc\simple_logic --mcdc-mode masking
+.\.c2testcases\Scripts\python.exe scripts\evaluate_llvm_mcdc_fixtures.py
+```
 
-Current executable scalar fixture coverage:
+The LLVM path is a separate confirmation workflow. The main report score is still a generated target score unless external coverage evidence is run and reviewed.
 
-- Confirmed fixtures: `9`
-- Average raw confirmed LLVM MC/DC: `0.9066`
-- Average adjusted covered-or-justified MC/DC: `1.0`
-- Full confirmed MC/DC: `7/9`
-- Struct-pointer fixture support: `architecture_lifecycle_gate.c` confirmed at `1.0`
-- Near-full confirmed MC/DC: `system_acceptance_matrix.c` at `0.9091`
-- Justified low-score case: `hard_coupled_conditions.c`, where repeated and logically dependent conditions limit source-level MC/DC.
+## Make Targets
+
+If GNU Make is available:
+
+```powershell
+make install
+make dev
+make test-unit
+make test-integration
+make mcdc SOURCE=tests/fixtures/c/simple_logic.c TARGET=logic MODE=masking OUT=build/mcdc-smoke
+make mcdc-coverage SOURCE=tests/fixtures/c/simple_logic.c TARGET=logic MODE=masking OUT=build/llvm-mcdc/simple_logic
+```
+
+## Current Caveats
+
+- Generated MC/DC target score is not the same as confirmed tool coverage.
+- `manual_required` rows are not executable until setup values or a harness model are supplied.
+- The parser is deterministic and local; it is not a full C interpreter.
+- Ambiguous roots are intentionally not guessed.

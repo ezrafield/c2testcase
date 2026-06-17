@@ -124,10 +124,15 @@ async def export_excel(payload: dict[str, object] = Body(...)) -> dict[str, str]
         scope=str(payload.get("scope") or "").strip(),
         name=str(payload.get("name") or "mcdc_testcases").strip() or "mcdc_testcases",
     )
+    fill_manual_for_btc = bool(payload.get("fill_manual_for_btc"))
     with TemporaryDirectory(prefix="c2testcase-export-") as tmp:
         output_dir = Path(tmp)
         excel_path = output_dir / f"{safe_excel_filename(metadata.name)}.xlsx"
-        write_testcase_workbook_rows(testcase_table_rows_from_dict(report), excel_path, metadata)
+        write_testcase_workbook_rows(
+            testcase_table_rows_from_dict(report, fill_manual_for_btc=fill_manual_for_btc),
+            excel_path,
+            metadata,
+        )
         return {
             "filename": excel_path.name,
             "download": base64.b64encode(excel_path.read_bytes()).decode("ascii"),
@@ -305,6 +310,31 @@ def render_index_html() -> str:
       background: #263241;
       color: white;
       border-color: #263241;
+    }
+    .report-tools {
+      display: flex;
+      gap: 8px;
+      margin: 0 0 10px;
+      flex-wrap: wrap;
+    }
+    .btc-toggle {
+      width: auto;
+      margin: 0;
+      background: #e8edf5;
+      color: var(--ink);
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+    }
+    .btc-toggle.active {
+      background: #99ccff;
+      color: #1f2937;
+      border-color: #6699cc;
+    }
+    .btc-toggle:hover {
+      background: #d7e2f2;
+    }
+    .btc-toggle.active:hover {
+      background: #7fb5e8;
     }
     pre {
       margin: 0;
@@ -554,6 +584,9 @@ def render_index_html() -> str:
         <button class="tab" type="button" data-download="excel">Export Excel</button>
         <button class="tab" type="button" data-view="ccode_interface">Ccode_interface</button>
       </div>
+      <div class="report-tools">
+        <button id="btc_fill_toggle" class="btc-toggle" type="button" aria-pressed="false">BTC fill MANUAL: off</button>
+      </div>
       <pre id="artifact">Upload a C source file to generate cases.</pre>
       <div id="testcase-table" class="table-wrap"></div>
       <div id="excel-export-panel" class="export-panel">
@@ -591,8 +624,16 @@ def render_index_html() -> str:
     const excelExportPanel = document.getElementById("excel-export-panel");
     const excelExportSubmit = document.getElementById("excel_export_submit");
     const excelExportStatus = document.getElementById("excel_export_status");
+    const btcFillToggle = document.getElementById("btc_fill_toggle");
     const ccodeInterface = document.getElementById("ccode-interface");
-    const state = { artifacts: {}, downloads: {}, excelFilename: "mcdc_testcases.xlsx", report: null, active: "gap_report.md" };
+    const state = {
+      artifacts: {},
+      downloads: {},
+      excelFilename: "mcdc_testcases.xlsx",
+      report: null,
+      active: "gap_report.md",
+      btcFillManual: false,
+    };
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -647,14 +688,35 @@ def render_index_html() -> str:
     });
 
     excelExportSubmit.addEventListener("click", exportExcel);
+    btcFillToggle.addEventListener("click", () => {
+      state.btcFillManual = !state.btcFillManual;
+      renderBtcFillToggle();
+      if (state.active === "testcase_table") {
+        renderTestcaseTable();
+      } else if (state.active === "excel_export") {
+        renderExcelExportPanel();
+      } else if (state.active === "ccode_interface") {
+        renderCcodeInterface();
+      }
+    });
+    renderBtcFillToggle();
+
+    function renderBtcFillToggle() {
+      btcFillToggle.classList.toggle("active", state.btcFillManual);
+      btcFillToggle.setAttribute("aria-pressed", String(state.btcFillManual));
+      btcFillToggle.textContent = state.btcFillManual ? "BTC fill MANUAL: on" : "BTC fill MANUAL: off";
+    }
 
     function renderSummary(report) {
       const decisions = report.decisions || [];
-      const cases = report.testcase_table?.rows?.length
+      const targetRows = report.testcase_table?.target_rows ?? report.testcase_table?.rows?.length
         ?? decisions.reduce((total, decision) => total + decision.cases.length, 0);
+      const concreteRows = report.testcase_table?.concrete_rows;
       document.getElementById("score").textContent = `${Math.round((report.score || 0) * 100)}%`;
       document.getElementById("decisions").textContent = decisions.length;
-      document.getElementById("cases").textContent = cases;
+      document.getElementById("cases").textContent = concreteRows == null || concreteRows === targetRows
+        ? targetRows
+        : `${targetRows} targets / ${concreteRows} concrete`;
       document.getElementById("mode").textContent = report.mcdc_mode || "-";
       document.getElementById("coverage").textContent = report.coverage_ready ? "yes" : "no";
     }
@@ -690,16 +752,18 @@ def render_index_html() -> str:
         : (state.report.output_variables || []).length
         ? state.report.output_variables
         : ["Decision_Result"];
+      const btcFallbacks = manualValueFallbacks(rows, variables, outputVariables);
       rows.sort((left, right) => compareTestcaseRows(left, right, variables));
       const headers = [
         "Step",
+        "Setup",
         ...variables,
         ...outputVariables,
       ];
       const table = document.createElement("table");
       const thead = table.createTHead();
       const groupRow = thead.insertRow();
-      ["Mode", ...variables.map(() => "Inputs"), ...outputVariables.map(() => "Outputs")].forEach((label) => {
+      ["Mode", "Setup", ...variables.map(() => "Inputs"), ...outputVariables.map(() => "Outputs")].forEach((label) => {
         const th = document.createElement("th");
         th.textContent = label;
         groupRow.append(th);
@@ -713,12 +777,18 @@ def render_index_html() -> str:
       const tbody = table.createTBody();
       rows.forEach((row, index) => {
         const tr = tbody.insertRow();
-        const assignments = variables.map((name) => row.inputs?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL");
+        const assignments = variables.map((name) =>
+          btcCellValue(row.inputs?.[name] ?? state.report.manual_inputs?.[name] ?? "MANUAL", btcFallbacks.inputs[name])
+        );
         const outputs = outputVariables.map((name) =>
-          row.outputs?.[name] ?? (name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL")
+          btcCellValue(
+            row.outputs?.[name] ?? (name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name] ?? "MANUAL"),
+            btcFallbacks.outputs[name]
+          )
         );
         const values = [
           index,
+          setupLabel(row.setupStatus),
           ...assignments,
           ...outputs,
         ];
@@ -736,7 +806,9 @@ def render_index_html() -> str:
       excelExportPanel.style.display = "block";
       ccodeInterface.style.display = "none";
       excelExportSubmit.disabled = !state.report;
-      excelExportStatus.textContent = state.report ? "" : "Generate cases before exporting Excel.";
+      excelExportStatus.textContent = state.report
+        ? (state.btcFillManual ? "BTC fill is on: MANUAL cells export as per-column minimal values or 0." : "")
+        : "Generate cases before exporting Excel.";
     }
 
     function renderCcodeInterface() {
@@ -836,10 +908,15 @@ def render_index_html() -> str:
         const heading = document.createElement("strong");
         heading.textContent = `Step ${row.step}: ${row.decisionResult ? "decision true" : "decision false"}`;
         card.append(heading);
+        card.append(detailLine(`Setup: ${setupLabel(row.setupStatus)}`));
         card.append(detailLine(`Reason: ${formatReason(decision, row)}`));
         card.append(detailLine(`Inputs: ${formatMap(row.inputs)}`));
         card.append(detailLine(`Outputs: ${formatMap(row.outputs)}`));
         card.append(detailLine(`Condition values: ${formatConditionValues(decision, row)}`));
+        graphTraceDetails(decision, row).forEach((line) => card.append(detailLine(line)));
+        if (row.setupNotes?.length) {
+          card.append(detailLine(`Setup notes: ${row.setupNotes.join("; ")}`));
+        }
         if (row.notes?.length) {
           card.append(detailLine(`Notes: ${row.notes.join("; ")}`));
         }
@@ -873,10 +950,78 @@ def render_index_html() -> str:
       return entries.map(([name, value]) => `${name}=${value}`).join(", ");
     }
 
+    function manualValueFallbacks(rows, inputColumns, outputColumns) {
+      const fallbacks = {
+        inputs: Object.fromEntries(inputColumns.map((name) => [name, 0])),
+        outputs: Object.fromEntries(outputColumns.map((name) => [name, 0])),
+      };
+      const collected = {
+        inputs: Object.fromEntries(inputColumns.map((name) => [name, []])),
+        outputs: Object.fromEntries(outputColumns.map((name) => [name, []])),
+      };
+      rows.forEach((row) => {
+        inputColumns.forEach((name) => {
+          const value = numericBtcValue(row.inputs?.[name] ?? state.report.manual_inputs?.[name]);
+          if (value !== null) collected.inputs[name].push(value);
+        });
+        outputColumns.forEach((name) => {
+          const value = numericBtcValue(
+            row.outputs?.[name] ?? (name === "Decision_Result" ? row.decisionResult : state.report.manual_outputs?.[name])
+          );
+          if (value !== null) collected.outputs[name].push(value);
+        });
+      });
+      inputColumns.forEach((name) => {
+        if (collected.inputs[name].length) fallbacks.inputs[name] = Math.min(...collected.inputs[name]);
+      });
+      outputColumns.forEach((name) => {
+        if (collected.outputs[name].length) fallbacks.outputs[name] = Math.min(...collected.outputs[name]);
+      });
+      return fallbacks;
+    }
+
+    function btcCellValue(value, fallback) {
+      if (state.btcFillManual && value === "MANUAL") return fallback ?? 0;
+      return value;
+    }
+
+    function numericBtcValue(value) {
+      if (value === "MANUAL" || value === undefined || value === null || value === "") return null;
+      if (value === true) return 1;
+      if (value === false) return 0;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string") {
+        const parsed = Number(value.trim());
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    }
+
+    function setupLabel(status) {
+      if (status === "manual_required") return "manual required";
+      if (status === "partial") return "partial";
+      return "concrete";
+    }
+
     function formatConditionValues(decision, row) {
       return (decision.conditions || [])
         .map((condition, index) => `${condition}=${row.values?.[index]}`)
         .join(", ");
+    }
+
+    function graphTraceDetails(decision, row) {
+      const graph = state.report?.interface_graph?.condition_traces || {};
+      return (row.covers || [])
+        .map((index) => {
+          const trace = graph[`${decision.id}:${index}`];
+          if (!trace) return "";
+          const roots = (trace.roots || []).join(", ") || "none";
+          const chain = (trace.chain || []).join(" -> ") || "none";
+          const outputs = trace.output_roots?.length ? `; output roots: ${trace.output_roots.join(", ")}` : "";
+          const value = row.values?.[index];
+          return `Graph trace: root input ${roots}; chain ${chain}; testcase value ${value}${outputs}`;
+        })
+        .filter(Boolean);
     }
 
     function testcaseRows(report) {
@@ -889,6 +1034,8 @@ def render_index_html() -> str:
           values: row.mcdc_condition_values || [],
           inputs: row.inputs || {},
           outputs: row.outputs || {},
+          setupStatus: row.setup_status || "concrete",
+          setupNotes: row.setup_notes || [],
           notes: row.notes || [],
         }));
       }
@@ -901,6 +1048,8 @@ def render_index_html() -> str:
           values: row.values || [],
           inputs: row.assignments || {},
           outputs: {},
+          setupStatus: row.assignments && Object.keys(row.assignments).length ? "concrete" : "manual_required",
+          setupNotes: row.notes || [],
           notes: row.notes || [],
         }))
       );
@@ -969,6 +1118,7 @@ def render_index_html() -> str:
           architecture: document.getElementById("excel_architecture").value,
           scope: document.getElementById("excel_scope").value,
           name: document.getElementById("excel_name").value,
+          fill_manual_for_btc: state.btcFillManual,
         }),
       });
       const payload = await response.json();
