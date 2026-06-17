@@ -925,12 +925,13 @@ def extract_log_var_interface(source: str) -> tuple[list[str], list[str], list[s
 
 def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str], list[str], dict[str, int], dict[str, Any]] | None:
     analysis = analyze_c_interface(source)
-    parameter_names = list(dict.fromkeys((*analysis.function_parameters, *analysis.data_extern, *analysis.data_public)))
+    parameter_names = list(dict.fromkeys((*analysis.data_extern, *analysis.data_public)))
     parameter_set = set(parameter_names)
     input_names = list(
         dict.fromkeys(
             name
             for name in (
+                *analysis.function_parameters,
                 *analysis.ext_sp_globals,
                 *analysis.ram_extern,
                 *analysis.condition_input_roots,
