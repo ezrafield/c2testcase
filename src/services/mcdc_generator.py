@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import product
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
 from typing import Any
@@ -438,6 +439,8 @@ def write_testcase_workbook_rows(
     with ZipFile(output_path, "w", ZIP_DEFLATED) as workbook:
         workbook.writestr("[Content_Types].xml", xlsx_content_types())
         workbook.writestr("_rels/.rels", xlsx_root_rels())
+        workbook.writestr("docProps/core.xml", xlsx_core_properties(metadata.name))
+        workbook.writestr("docProps/app.xml", xlsx_app_properties(metadata.name))
         workbook.writestr("xl/workbook.xml", xlsx_workbook(metadata.name))
         workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
         workbook.writestr("xl/styles.xml", xlsx_styles())
@@ -1422,6 +1425,8 @@ def xlsx_content_types() -> str:
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>
 """
 
@@ -1430,17 +1435,65 @@ def xlsx_root_rels() -> str:
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>
 """
 
 
+def xlsx_core_properties(name: str) -> str:
+    title = xml_text(name or "mcdc_testcases")
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>{title}</dc:title>
+  <dc:creator>c2testcase</dc:creator>
+  <cp:lastModifiedBy>c2testcase</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:modified>
+</cp:coreProperties>
+"""
+
+
+def xlsx_app_properties(sheet_name: str) -> str:
+    safe_name = xml_text(safe_sheet_name(sheet_name))
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>c2testcase</Application>
+  <DocSecurity>0</DocSecurity>
+  <ScaleCrop>false</ScaleCrop>
+  <HeadingPairs>
+    <vt:vector size="2" baseType="variant">
+      <vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant>
+      <vt:variant><vt:i4>1</vt:i4></vt:variant>
+    </vt:vector>
+  </HeadingPairs>
+  <TitlesOfParts>
+    <vt:vector size="1" baseType="lpstr">
+      <vt:lpstr>{safe_name}</vt:lpstr>
+    </vt:vector>
+  </TitlesOfParts>
+  <Company></Company>
+  <LinksUpToDate>false</LinksUpToDate>
+  <SharedDoc>false</SharedDoc>
+  <HyperlinksChanged>false</HyperlinksChanged>
+  <AppVersion>16.0300</AppVersion>
+</Properties>
+"""
+
+
 def xlsx_workbook(sheet_name: str = "Testcases") -> str:
-    safe_name = escape(safe_sheet_name(sheet_name))
+    safe_name = quoteattr(xml_valid_text(safe_sheet_name(sheet_name)))
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="23426"/>
+  <workbookPr defaultThemeVersion="166925"/>
+  <bookViews>
+    <workbookView xWindow="0" yWindow="0" windowWidth="24000" windowHeight="15000"/>
+  </bookViews>
   <sheets>
-    <sheet name="{safe_name}" sheetId="1" r:id="rId1"/>
+    <sheet name={safe_name} sheetId="1" r:id="rId1"/>
   </sheets>
+  <calcPr calcId="191029"/>
 </workbook>
 """
 
@@ -1482,6 +1535,9 @@ def xlsx_styles() -> str:
     <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
     <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
   </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+  <dxfs count="0"/>
+  <tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
 </styleSheet>
 """
 
@@ -1584,9 +1640,34 @@ def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int =
     if isinstance(value, bool):
         return f'<c r="{reference}" t="b"{style_attr}><v>{int(value)}</v></c>'
     if isinstance(value, int | float):
+        if isinstance(value, float) and not math.isfinite(value):
+            text = xml_text(str(value))
+            return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t>{text}</t></is></c>'
         return f'<c r="{reference}"{style_attr}><v>{value}</v></c>'
-    text = escape(str(value))
-    return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t>{text}</t></is></c>'
+    raw_text = xml_valid_text(str(value))
+    text = escape(raw_text)
+    space_attr = ' xml:space="preserve"' if raw_text != raw_text.strip() else ""
+    return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t{space_attr}>{text}</t></is></c>'
+
+
+def xml_text(value: str) -> str:
+    return escape(xml_valid_text(value))
+
+
+def xml_valid_text(value: str) -> str:
+    return "".join(character if is_xml_character(character) else " " for character in value)
+
+
+def is_xml_character(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        codepoint == 0x09
+        or codepoint == 0x0A
+        or codepoint == 0x0D
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )
 
 
 def column_widths(rows: list[list[TableValue]]) -> list[int]:
