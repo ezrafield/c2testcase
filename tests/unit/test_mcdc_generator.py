@@ -1,4 +1,5 @@
 from pathlib import Path
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 from src.services.mcdc_generator import (
@@ -12,6 +13,7 @@ from src.services.mcdc_generator import (
     testcase_table_rows_from_dict as build_testcase_table_rows_from_dict,
     value_for_condition,
     write_report_artifacts,
+    write_testcase_workbook_rows,
 )
 
 
@@ -490,6 +492,47 @@ def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> No
     assert "Comment" in sheet_xml
     assert "<mergeCells" in sheet_xml
     assert 'topLeftCell="A7"' in sheet_xml
+
+
+def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
+    output_path = tmp_path / "sharepoint.xlsx"
+    metadata = ExcelExportMetadata(
+        format_version="1.3",
+        architecture='Example "Architecture" & <C-Code>',
+        scope="sample.c:1:f\x08",
+        name='SIL "SV" ATG',
+    )
+
+    write_testcase_workbook_rows(
+        [
+            ["Mode", "Inputs", "Outputs"],
+            ["Step", "a", "y"],
+            [0, " MANUAL ", 1],
+        ],
+        output_path,
+        metadata,
+    )
+
+    with ZipFile(output_path) as workbook:
+        names = set(workbook.namelist())
+        assert "docProps/core.xml" in names
+        assert "docProps/app.xml" in names
+        workbook_xml = workbook.read("xl/workbook.xml").decode()
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        styles_xml = workbook.read("xl/styles.xml").decode()
+        root_rels = workbook.read("_rels/.rels").decode()
+        for part in names:
+            if part.endswith((".xml", ".rels")):
+                ElementTree.fromstring(workbook.read(part))
+
+    assert "SIL &quot;SV&quot; ATG" in workbook_xml or 'SIL "SV" ATG' in workbook_xml
+    assert "core-properties" in root_rels
+    assert "extended-properties" in root_rels
+    assert "<cellStyles" in styles_xml
+    assert "<dxfs" in styles_xml
+    assert "<tableStyles" in styles_xml
+    assert "sample.c:1:f " in sheet_xml
+    assert 'xml:space="preserve"' in sheet_xml
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:
