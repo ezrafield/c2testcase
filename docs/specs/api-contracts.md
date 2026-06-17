@@ -122,10 +122,10 @@ For ordinary C logic, `testcase_table` is derived from generated MC/DC cases:
 
 For TargetLink-style generated C, the table uses the declared interface:
 
-- target function parameters are parameter candidates.
+- target function parameters are input candidates because the testcase controls function-call arguments.
 - `EXT_SP_GLOBAL` declarations are input candidates.
 - `$RAM_EXTERN$` declarations are runtime inputs, even when they are only used by fallback/output assignments and not directly by a decision condition.
-- `$DATA_PUBLIC$` declarations are parameter candidates, and simple numeric initializers are copied into generated rows.
+- `$DATA_EXTERN$` and `$DATA_PUBLIC$` declarations are parameter candidates, and simple numeric initializers are copied into generated rows.
 - `$RAM_PUBLIC$`, `GLOBAL`, and globals written by the target function are output candidates.
 - local variables are traced to root globals where possible and are not emitted as table columns. The local data-flow pass handles simple assignments, function-call-derived locals, array reads, field reads, pointer aliases such as `p = &global`, and dereferences such as `local = *p`.
 - the same root variable may appear as both an input and an output when different conditions/assignments require it.

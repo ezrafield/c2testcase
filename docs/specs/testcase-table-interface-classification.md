@@ -15,6 +15,7 @@ For TargetLink-style C, the classifier reads top-level declarations, section com
 A variable is an input when it is a runtime root value supplied from outside the function/module:
 
 - Function-external signal declarations such as `EXT_SP_GLOBAL`.
+- Target function parameters, because the testcase controls them when calling the function.
 - `$RAM_EXTERN$` variables, even when they are not used directly in a decision condition.
 - `$RAM_PUBLIC$` variables when they are read by a decision before or while also being written.
 
@@ -50,8 +51,7 @@ else {
 
 A variable is a parameter when it is calibration/static data rather than a runtime input signal:
 
-- Target function parameters are placed in `Parameters` for TargetLink tables.
-- `$DATA_PUBLIC$` declarations are parameters.
+- `$DATA_EXTERN$` and `$DATA_PUBLIC$` declarations are parameters.
 - Numeric scalar and array initializers are copied into testcase rows when the C file provides them.
 
 Example:

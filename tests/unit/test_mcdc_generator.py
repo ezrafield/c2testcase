@@ -232,15 +232,14 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     assert actual_rows[0] == [
         "Mode",
         "Inputs",
-        *([" "] * 7),
-        "Parameters",
+        *([" "] * 8),
         "Outputs",
         *([" "] * 7),
     ]
     assert actual_rows[1] == [
         "Step",
-        *expected_rows[1][2:10],
         "f_canrxok",
+        *expected_rows[1][2:10],
         *expected_rows[1][10:],
     ]
     assert len(actual_rows) > len(expected_rows)
@@ -252,10 +251,11 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     assert table["target_rows"] == len(table["rows"])
     assert table["concrete_rows"] == len(table["rows"])
     assert table["manual_required_rows"] == 0
-    assert table["input_columns"] == expected_rows[1][2:10]
-    assert table["parameter_columns"] == ["f_canrxok"]
+    assert table["input_columns"] == expected_rows[1][1:10]
+    assert table["parameter_columns"] == []
     assert table["output_columns"] == expected_rows[1][10:]
     assert table["input_columns"] == [
+        "f_canrxok",
         "VU16srs_lat_g_fd_imrx",
         "VU16srs_lat_g_fdrx",
         "VU16srs_lon_g_fd_imrx",
@@ -267,10 +267,10 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     ]
     assert {row["decision_id"] for row in table["rows"]} == {"D1", "D2", "D3", "D4"}
     input_rows = [row["inputs"] for row in table["rows"]]
+    assert {row["f_canrxok"] for row in input_rows} == {0, 1}
     assert any(row["VU16srs_pitch_fdrx"] == 65535 for row in input_rows)
     assert any(row["VU16srs_roll_fdrx"] == 65535 for row in input_rows)
     assert any(row["VU16srs_yaw_fd_imrx"] == 65535 for row in input_rows)
-    assert {row["parameters"]["f_canrxok"] for row in table["rows"]} == {0, 1}
     assert any(row["outputs"]["VF24bpitchfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24brollfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24byawfd_s"] == 124.996 for row in table["rows"])
