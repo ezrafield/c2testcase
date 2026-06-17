@@ -495,8 +495,8 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "manual_input" in sheet_xml
     assert "99" in sheet_xml
     assert "Format Version" in sheet_xml
-    assert "Comment" not in sheet_xml
-    assert "<mergeCells" not in sheet_xml
+    assert sheet_xml.count("Comment") == 1
+    assert "<mergeCells" in sheet_xml
 
 
 def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> None:
@@ -526,8 +526,8 @@ def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> No
     assert "Example Architecture [C-Code]" in sheet_xml
     assert "sample.c:1:f" in sheet_xml
     assert "SIL_SV_ATG_1" in sheet_xml
-    assert "Comment" not in sheet_xml
-    assert "<mergeCells" not in sheet_xml
+    assert sheet_xml.count("Comment") == 1
+    assert "<mergeCells" in sheet_xml
     assert 'topLeftCell="A7"' in sheet_xml
 
 
@@ -554,11 +554,13 @@ def test_excel_export_styles_inputs_parameters_outputs_sections(tmp_path: Path) 
     assert 'r="B5" t="inlineStr" s="2"' in sheet_xml
     assert 'r="C5" t="inlineStr" s="4"' in sheet_xml
     assert 'r="D5" t="inlineStr" s="3"' in sheet_xml
+    assert 'r="E5" t="inlineStr" s="8"' in sheet_xml
     assert 'r="B6" t="inlineStr" s="5"' in sheet_xml
     assert 'r="C6" t="inlineStr" s="9"' in sheet_xml
     assert 'r="D6" t="inlineStr" s="6"' in sheet_xml
-    assert "Comment" not in sheet_xml
-    assert "<mergeCells" not in sheet_xml
+    assert 'r="E6" t="inlineStr" s="7"><is><t></t></is></c>' in sheet_xml
+    assert sheet_xml.count("Comment") == 1
+    assert '<mergeCell ref="E5:E6"/>' in sheet_xml
 
 
 def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
