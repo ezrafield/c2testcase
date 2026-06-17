@@ -9,6 +9,8 @@ from src.services.mcdc_generator import (
     generate_mcdc_report,
     summarize_coverage_readiness,
     testcase_table_rows as build_testcase_table_rows,
+    testcase_table_rows_from_dict as build_testcase_table_rows_from_dict,
+    value_for_condition,
     write_report_artifacts,
 )
 
@@ -122,6 +124,32 @@ def test_testcase_table_fills_missing_manual_values(tmp_path: Path) -> None:
     assert all(cell != "" for row in rows for cell in row)
 
 
+def test_testcase_table_can_fill_manual_values_for_btc_export() -> None:
+    report = {
+        "testcase_table": {
+            "input_columns": ["a", "b", "missing"],
+            "output_columns": ["y"],
+            "rows": [
+                {"inputs": {"a": "MANUAL", "b": 5, "missing": "MANUAL"}, "outputs": {"y": "MANUAL"}},
+                {"inputs": {"a": -2, "b": "MANUAL", "missing": "MANUAL"}, "outputs": {"y": 1}},
+            ],
+        }
+    }
+
+    default_rows = build_testcase_table_rows_from_dict(report)
+    btc_rows = build_testcase_table_rows_from_dict(report, fill_manual_for_btc=True)
+
+    assert default_rows[2:] == [
+        [0, "MANUAL", 5, "MANUAL", "MANUAL"],
+        [1, -2, "MANUAL", "MANUAL", 1],
+    ]
+    assert btc_rows[2:] == [
+        [0, -2, 5, 0, 1],
+        [1, -2, 5, 0, 1],
+    ]
+    assert "MANUAL" not in [cell for row in btc_rows[2:] for cell in row]
+
+
 def test_testcase_table_columns_default_to_c_function_inputs(tmp_path: Path) -> None:
     source = tmp_path / "logic.c"
     source.write_text(
@@ -151,6 +179,8 @@ def test_report_returns_structured_testcase_table_from_c_inputs(tmp_path: Path) 
     assert payload["mcdc_complete"] is True
     assert payload["testcase_table"]["score"] == 1.0
     assert payload["testcase_table"]["mcdc_complete"] is True
+    assert payload["testcase_table"]["target_rows"] == len(payload["testcase_table"]["rows"])
+    assert payload["testcase_table"]["concrete_rows"] == len(payload["testcase_table"]["rows"])
     assert payload["testcase_table"]["input_columns"] == ["a", "b", "flag"]
     assert payload["testcase_table"]["output_columns"] == ["Decision_Result"]
     assert payload["testcase_table"]["rows"]
@@ -158,6 +188,7 @@ def test_report_returns_structured_testcase_table_from_c_inputs(tmp_path: Path) 
         assert row["step"] == index
         assert set(row["inputs"]) == {"a", "b", "flag"}
         assert row["outputs"].keys() == {"Decision_Result"}
+        assert row["setup_status"] == "concrete"
         assert row["covers"]
 
 
@@ -188,6 +219,9 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
 
     table = report.to_dict()["testcase_table"]
     assert table["mcdc_complete"] is True
+    assert table["target_rows"] == len(table["rows"])
+    assert table["concrete_rows"] == len(table["rows"])
+    assert table["manual_required_rows"] == 0
     assert table["input_columns"] == expected_rows[1][1:10]
     assert table["output_columns"] == expected_rows[1][10:]
     assert table["input_columns"][0] == "f_canrxok"
@@ -210,6 +244,152 @@ def test_testcase_table_uses_targetlink_template_shape_with_mcdc_rows() -> None:
     assert any(row["outputs"]["VF24bpitchfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24brollfd_s"] == 124.996 for row in table["rows"])
     assert any(row["outputs"]["VF24byawfd_s"] == 124.996 for row in table["rows"])
+
+
+def test_targetlink_table_traces_condition_locals_to_root_interface_variables() -> None:
+    source = Path("tests/fixtures/c/C_source_tp-lnpr_lnrsh_cal-e10at-2.c")
+
+    report = generate_mcdc_report(source, target_function="J_tplnpr_lnrsh_cal", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+
+    assert "Sa2_bgratiof_s_" not in table["input_columns"]
+    assert "Sa4_Sum2" not in table["input_columns"]
+    assert "VF24bgratiof_s" in table["input_columns"]
+    assert "AF24ln_bgratiofi_s" in table["input_columns"]
+    assert "AF24ln_bgratiofi_s" in table["output_columns"]
+    assert "VU16ln_rsh" in table["output_columns"]
+    ratio_rows = [row for row in table["rows"] if row["line"] in {437, 442}]
+    assert ratio_rows
+    assert {row["inputs"]["VF24bgratiof_s"] for row in ratio_rows} >= {-1.0, 0.0, 8.0, 9.0}
+    assert all("Sa2_bgratiof_s_" not in row["inputs"] for row in ratio_rows)
+    assert any("traced VF24bgratiof_s -> Sa2_bgratiof_s_" in " ".join(row["notes"]) for row in ratio_rows)
+
+    graph = report.to_dict()["interface_graph"]
+    assert graph["nodes"]
+    assert graph["edges"]
+    assert graph["condition_traces"]["D18:0"]["roots"] == ["VF24bgratiof_s"]
+    assert graph["condition_traces"]["D18:0"]["chain"] == ["VF24bgratiof_s", "Sa2_bgratiof_s_"]
+
+
+def test_value_for_condition_accepts_c_float_and_scientific_literals() -> None:
+    assert value_for_condition("Sa2_bgratiof_s_ > 8.F", True) == ("Sa2_bgratiof_s_", 9.0)
+    assert value_for_condition("Sa2_bgratiof_s_ < 0.F", False) == ("Sa2_bgratiof_s_", 0.0)
+    assert value_for_condition("x <= 1.52587890625e-05F", False) == ("x", 1.0000152587890625)
+
+
+def test_targetlink_data_flow_traces_pointer_array_field_and_call_roots(tmp_path: Path) -> None:
+    source = tmp_path / "data_flow.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt16 sensor_raw;
+extern UInt16 source_arr[2];
+extern State state;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt16 output_flag;
+
+UInt16 filter(UInt16 value);
+
+void f(void)
+{
+   UInt16 *p;
+   UInt16 from_ptr;
+   UInt16 from_call;
+   UInt16 from_arr;
+
+   p = &sensor_raw;
+   from_ptr = *p;
+   from_call = filter(from_ptr);
+   from_arr = source_arr[1];
+
+   if (from_call > 10U) {
+      output_flag = 1;
+   }
+   if (from_arr <= 20U) {
+      output_flag = 2;
+   }
+   if (state.ready != 0) {
+      output_flag = 3;
+   }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+
+    assert table["input_columns"] == ["sensor_raw", "source_arr", "state"]
+    assert table["output_columns"] == ["output_flag"]
+    assert "from_ptr" not in table["input_columns"]
+    assert "from_call" not in table["input_columns"]
+    assert "from_arr" not in table["input_columns"]
+
+    rows_by_line = {}
+    for row in table["rows"]:
+        rows_by_line.setdefault(row["line"], []).append(row)
+
+    call_rows = rows_by_line[24]
+    assert {row["inputs"]["sensor_raw"] for row in call_rows} == {10, 11}
+    assert any("traced sensor_raw -> p -> from_ptr -> from_call" in " ".join(row["notes"]) for row in call_rows)
+
+    array_rows = rows_by_line[27]
+    assert {row["inputs"]["source_arr"] for row in array_rows} == {20, 21}
+    assert any("traced source_arr -> from_arr" in " ".join(row["notes"]) for row in array_rows)
+
+    field_rows = rows_by_line[30]
+    assert {row["inputs"]["state"] for row in field_rows} == {0, 1}
+
+    graph = report.to_dict()["interface_graph"]
+    assert graph["condition_traces"]["D1:0"]["chain"] == ["sensor_raw", "p", "from_ptr", "from_call"]
+    assert graph["condition_traces"]["D2:0"]["chain"] == ["source_arr", "from_arr"]
+    assert graph["condition_traces"]["D3:0"]["chain"] == ["state", "state.ready"]
+
+
+def test_targetlink_graph_marks_ambiguous_multi_root_inputs_manual(tmp_path: Path) -> None:
+    source = tmp_path / "ambiguous.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt16 a;
+extern UInt16 b;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt16 output_flag;
+
+void f(void)
+{
+   UInt16 mixed;
+   mixed = a + b;
+   if (mixed > 5U) {
+      output_flag = 1;
+   }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    payload = report.to_dict()
+    table = payload["testcase_table"]
+    graph = payload["interface_graph"]
+
+    assert graph["condition_traces"]["D1:0"]["roots"] == ["a", "b"]
+    assert graph["condition_traces"]["D1:0"]["chain"] == ["a", "b", "mixed"]
+    assert table["input_columns"] == ["a", "b"]
+    assert all(row["inputs"] == {"a": "MANUAL", "b": "MANUAL"} for row in table["rows"])
+    assert all(row["setup_status"] == "manual_required" for row in table["rows"])
+    assert table["manual_required_rows"] == len(table["rows"])
+    assert table["concrete_rows"] == 0
+    assert all("MANUAL: ambiguous roots [a, b] for `mixed`." in row["notes"] for row in table["rows"])
+    assert all("Manual setup required" in " ".join(row["setup_notes"]) for row in table["rows"])
+
+
+def test_value_for_condition_accepts_pointer_array_and_field_lvalues() -> None:
+    assert value_for_condition("(*p) > 3U", True) == ("*p", 4)
+    assert value_for_condition("source_arr[1] <= 20U", False) == ("source_arr[1]", 21)
+    assert value_for_condition("state.ready != 0", False) == ("state.ready", 0)
 
 
 def format_table_cell(value: object) -> str:

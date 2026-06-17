@@ -27,6 +27,45 @@ TOOLCHAIN_COMMANDS = {
 }
 LLVM_TOOL_NAMES = {"clang", "llvm-cov", "llvm-profdata"}
 LLVM_BIN_ENV_VAR = "C2TESTCASE_LLVM_BIN"
+IDENTIFIER_PATTERN = re.compile(r"\b[A-Za-z_]\w*\b")
+C_TYPE_WORDS = {
+    "Bool",
+    "Char",
+    "Const",
+    "Double",
+    "Float",
+    "Float32",
+    "Float64",
+    "FLG",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "SInt8",
+    "SInt16",
+    "SInt32",
+    "SInt64",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "VF24",
+    "VFLG",
+    "VU08",
+    "VU16",
+    "VU32",
+    "CU08",
+    "CU16",
+    "CS15",
+    "const",
+    "extern",
+    "GLOBAL",
+    "EXT_SP_GLOBAL",
+    "return",
+    "sizeof",
+    "static",
+    "volatile",
+}
 
 
 @dataclass(frozen=True)
@@ -39,11 +78,165 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class InterfaceAnalysis:
+    function_parameters: tuple[str, ...]
+    global_order: tuple[str, ...]
+    ext_sp_globals: tuple[str, ...]
+    global_outputs: tuple[str, ...]
+    ram_public: tuple[str, ...]
+    local_names: frozenset[str]
+    assignment_sources: dict[str, tuple[str, ...]]
+    assignment_targets: tuple[str, ...]
+    condition_input_roots: tuple[str, ...]
+    condition_output_roots: tuple[str, ...]
+    variable_graph: "VariableGraph"
+
+
+@dataclass(frozen=True)
+class VariableNode:
+    id: str
+    kind: str
+    name: str
+    line: int | None = None
+    expression: str = ""
+
+
+@dataclass(frozen=True)
+class VariableEdge:
+    source: str
+    target: str
+    kind: str
+    line: int | None = None
+    expression: str = ""
+
+
+@dataclass
+class VariableGraph:
+    nodes_by_name: dict[str, VariableNode] = field(default_factory=dict)
+    edges: list[VariableEdge] = field(default_factory=list)
+    dependencies: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    condition_traces: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def add_node(self, name: str, kind: str, line: int | None = None, expression: str = "") -> str:
+        canonical = canonical_lvalue(name)
+        existing = self.nodes_by_name.get(canonical)
+        if existing is not None:
+            return existing.id
+        node_id = f"n{len(self.nodes_by_name) + 1}"
+        self.nodes_by_name[canonical] = VariableNode(
+            id=node_id,
+            kind=kind,
+            name=canonical,
+            line=line,
+            expression=expression,
+        )
+        return node_id
+
+    def add_edge(self, source: str, target: str, kind: str, line: int | None = None, expression: str = "") -> None:
+        source_id = self.add_node(source, graph_kind_for_name(source))
+        target_id = self.add_node(target, graph_kind_for_name(target))
+        edge = VariableEdge(source=source_id, target=target_id, kind=kind, line=line, expression=expression)
+        if edge not in self.edges:
+            self.edges.append(edge)
+
+    def add_dependency(self, target: str, sources: tuple[str, ...]) -> None:
+        canonical_target = canonical_lvalue(target)
+        existing = list(self.dependencies.get(canonical_target, ()))
+        for source in sources:
+            canonical_source = canonical_lvalue(source)
+            if canonical_source and canonical_source not in existing:
+                existing.append(canonical_source)
+        self.dependencies[canonical_target] = tuple(existing)
+
+    def trace_roots(self, name: str, root_names: set[str], seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+        canonical = canonical_lvalue(name)
+        if canonical in root_names:
+            return (canonical,)
+        if canonical in seen:
+            return ()
+        if canonical.startswith("*"):
+            return self.trace_roots(canonical[1:].strip(), root_names, seen | {canonical})
+        container = lvalue_container_name(canonical)
+        if container and container != canonical:
+            return self.trace_roots(container, root_names, seen | {canonical})
+        roots: list[str] = []
+        for dependency in self.dependencies.get(canonical, ()):
+            roots.extend(self.trace_roots(dependency, root_names, seen | {canonical}))
+        return tuple(dict.fromkeys(roots))
+
+    def trace_chain(self, name: str, root_names: set[str], seen: frozenset[str] = frozenset()) -> list[str]:
+        canonical = canonical_lvalue(name)
+        if canonical in root_names or canonical in seen:
+            return [canonical]
+        dependencies = self.dependencies.get(canonical, ())
+        if not dependencies:
+            container = lvalue_container_name(canonical)
+            if container and container != canonical:
+                return [*self.trace_chain(container, root_names, seen | {canonical}), canonical]
+            if canonical.startswith("*"):
+                return [*self.trace_chain(canonical[1:].strip(), root_names, seen | {canonical}), canonical]
+            return [canonical]
+        chain: list[str] = []
+        for dependency in dependencies:
+            for name in self.trace_chain(dependency, root_names, seen | {canonical}):
+                if name not in chain:
+                    chain.append(name)
+        return [*chain, canonical]
+
+    def add_condition_trace(
+        self,
+        trace_key: str,
+        condition: str,
+        candidate_name: str,
+        root_names: set[str],
+        output_roots: list[str] | None = None,
+    ) -> dict[str, Any]:
+        roots = list(self.trace_roots(candidate_name, root_names))
+        chain = self.trace_chain(candidate_name, root_names)
+        trace = {
+            "condition": condition,
+            "roots": roots,
+            "chain": chain,
+            "output_roots": output_roots or [],
+        }
+        self.condition_traces[trace_key] = trace
+        self.add_node(trace_key, "condition", expression=condition)
+        for name in chain:
+            self.add_edge(name, trace_key, "condition_uses", expression=condition)
+        return trace
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "nodes": [
+                {
+                    "id": node.id,
+                    "kind": node.kind,
+                    "name": node.name,
+                    **({"line": node.line} if node.line is not None else {}),
+                    **({"expression": node.expression} if node.expression else {}),
+                }
+                for node in self.nodes_by_name.values()
+            ],
+            "edges": [
+                {
+                    "from": edge.source,
+                    "to": edge.target,
+                    "kind": edge.kind,
+                    **({"line": edge.line} if edge.line is not None else {}),
+                    **({"expression": edge.expression} if edge.expression else {}),
+                }
+                for edge in self.edges
+            ],
+            "condition_traces": self.condition_traces,
+        }
+
+
+@dataclass(frozen=True)
 class MCDCRow:
     values: tuple[bool, ...]
     decision_result: bool
     covers: tuple[int, ...] = field(default_factory=tuple)
-    assignments: dict[str, int | bool] = field(default_factory=dict)
+    assignments: dict[str, TableValue] = field(default_factory=dict)
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -83,6 +276,7 @@ class MCDCReport:
     coverage_ready: bool = False
     coverage_status: str = "not checked"
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    interface_graph: dict[str, Any] = field(default_factory=dict)
 
     @property
     def score(self) -> float:
@@ -104,6 +298,7 @@ class MCDCReport:
             "output_variables": list(self.output_variables),
             "manual_outputs": self.manual_outputs,
             "testcase_table": testcase_table(report=self),
+            "interface_graph": self.interface_graph,
             "headers": list(self.headers),
             "include_dirs": list(self.include_dirs),
             "compile_flags": list(self.compile_flags),
@@ -174,6 +369,7 @@ def generate_mcdc_report(
     clean_source = strip_comments_and_strings(source)
     decisions = extract_decisions(clean_source)
     detected_input_variables = extract_function_parameters(clean_source, target_function)
+    interface_analysis = analyze_c_interface(source)
     warnings: list[str] = []
 
     if not decisions:
@@ -200,6 +396,7 @@ def generate_mcdc_report(
         coverage_ready=coverage_ready,
         coverage_status=coverage_status,
         warnings=tuple(warnings),
+        interface_graph=interface_analysis.variable_graph.to_dict(),
     )
 
 
@@ -247,10 +444,15 @@ def write_testcase_workbook_rows(
         workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows, metadata))
 
 
-def testcase_table_rows_from_dict(report: dict[str, Any]) -> list[list[TableValue]]:
+def testcase_table_rows_from_dict(
+    report: dict[str, Any],
+    *,
+    fill_manual_for_btc: bool = False,
+) -> list[list[TableValue]]:
     table = report.get("testcase_table", {})
     input_columns = list(table.get("input_columns", []))
     output_columns = list(table.get("output_columns", []))
+    btc_fallbacks = manual_value_fallbacks(table) if fill_manual_for_btc else {"inputs": {}, "outputs": {}}
     group_headers = table.get(
         "group_headers",
         ["Mode", *(["Inputs"] * len(input_columns)), *(["Outputs"] * len(output_columns))],
@@ -262,16 +464,89 @@ def testcase_table_rows_from_dict(report: dict[str, Any]) -> list[list[TableValu
     for row in table.get("rows", []):
         inputs = row.get("inputs", {})
         outputs = row.get("outputs", {})
+        input_values = [
+            btc_cell_value(
+                inputs.get(name, "MANUAL"),
+                btc_fallbacks["inputs"].get(name, 0),
+                fill_manual_for_btc,
+            )
+            for name in input_columns
+        ]
+        output_values = [
+            btc_cell_value(
+                outputs.get(name, "MANUAL"),
+                btc_fallbacks["outputs"].get(name, 0),
+                fill_manual_for_btc,
+            )
+            for name in output_columns
+        ]
         rows.append(
             [
                 row.get("step", len(rows) - 2),
-                *(inputs.get(name, "MANUAL") for name in input_columns),
-                *(outputs.get(name, "MANUAL") for name in output_columns),
+                *input_values,
+                *output_values,
             ]
         )
     if len(rows) == 2:
-        rows.append(["No generated testcases", *(["MANUAL"] * len(input_columns)), *(["MANUAL"] * len(output_columns))])
+        empty_value: TableValue = 0 if fill_manual_for_btc else "MANUAL"
+        rows.append(
+            [
+                "No generated testcases",
+                *([empty_value] * len(input_columns)),
+                *([empty_value] * len(output_columns)),
+            ]
+        )
     return rows
+
+
+def manual_value_fallbacks(table: dict[str, Any]) -> dict[str, dict[str, TableValue]]:
+    input_columns = list(table.get("input_columns", []))
+    output_columns = list(table.get("output_columns", []))
+    values: dict[str, dict[str, list[TableValue]]] = {
+        "inputs": {name: [] for name in input_columns},
+        "outputs": {name: [] for name in output_columns},
+    }
+    for row in table.get("rows", []):
+        for group_name, columns in (("inputs", input_columns), ("outputs", output_columns)):
+            row_values = row.get(group_name, {})
+            if not isinstance(row_values, dict):
+                continue
+            for name in columns:
+                numeric_value = btc_numeric_value(row_values.get(name))
+                if numeric_value is not None:
+                    values[group_name][name].append(numeric_value)
+    return {
+        group_name: {
+            name: min(column_values) if column_values else 0
+            for name, column_values in group_values.items()
+        }
+        for group_name, group_values in values.items()
+    }
+
+
+def btc_cell_value(value: Any, fallback: TableValue, fill_manual_for_btc: bool) -> TableValue:
+    if fill_manual_for_btc and value == "MANUAL":
+        return fallback
+    return value
+
+
+def btc_numeric_value(value: Any) -> TableValue | None:
+    if value == "MANUAL" or value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = float(stripped)
+        except ValueError:
+            return None
+        return int(parsed) if parsed.is_integer() else parsed
+    return None
 
 
 def testcase_table_rows(report: MCDCReport) -> list[list[TableValue]]:
@@ -324,6 +599,7 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
                 name: row.decision_result if name == "Decision_Result" else report.manual_outputs.get(name, "MANUAL")
                 for name in output_names
             }
+            setup_status, setup_notes = testcase_setup_status(assignments, variable_names, list(row.notes))
             rows.append(
                 {
                     "step": step_index,
@@ -331,6 +607,8 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
                     "line": result.decision.line,
                     "inputs": assignments,
                     "outputs": outputs,
+                    "setup_status": setup_status,
+                    "setup_notes": setup_notes,
                     "mcdc_condition_values": list(row.values),
                     "decision_result": row.decision_result,
                     "covers": list(row.covers),
@@ -344,6 +622,7 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
         "score": round(report.score, 4),
         "score_kind": "generated_target_score",
         "mcdc_complete": report.score == 1.0,
+        **testcase_setup_counts(rows),
         "rows": rows,
     }
 
@@ -357,6 +636,8 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
     output_names = targetlink_output_order(output_names)
     testcase_inputs = targetlink_mcdc_interface_inputs(report, input_names, output_names)
     if testcase_inputs is None:
+        testcase_inputs = targetlink_generic_interface_inputs(report, input_names)
+    if testcase_inputs is None:
         return None
 
     rows: list[dict[str, Any]] = []
@@ -364,13 +645,17 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
     for step_index, scenario in enumerate(testcase_inputs):
         inputs = scenario["inputs"]
         output_state.update(evaluate_targetlink_outputs(inputs, output_state))
+        row_inputs = {name: inputs.get(name, "MANUAL") for name in input_names}
+        setup_status, setup_notes = testcase_setup_status(row_inputs, input_names, scenario["notes"])
         rows.append(
             {
                 "step": step_index,
                 "decision_id": scenario["decision_id"],
                 "line": scenario["line"],
-                "inputs": {name: inputs.get(name, "MANUAL") for name in input_names},
+                "inputs": row_inputs,
                 "outputs": {name: output_state.get(name, "MANUAL") for name in output_names},
+                "setup_status": setup_status,
+                "setup_notes": setup_notes,
                 "mcdc_condition_values": scenario["mcdc_condition_values"],
                 "decision_result": scenario["decision_result"],
                 "covers": scenario["covers"],
@@ -385,6 +670,7 @@ def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | No
         "score": round(report.score, 4),
         "score_kind": "generated_target_score",
         "mcdc_complete": report.score == 1.0,
+        **testcase_setup_counts(rows),
         "rows": rows,
     }
 
@@ -397,6 +683,33 @@ def targetlink_group_headers(input_names: list[str], output_names: list[str]) ->
         "Outputs",
         *([" "] * max(len(output_names) - 1, 0)),
     ]
+
+
+def testcase_setup_status(
+    inputs: dict[str, TableValue],
+    input_names: list[str],
+    notes: list[str],
+) -> tuple[str, list[str]]:
+    manual_inputs = [name for name in input_names if inputs.get(name, "MANUAL") == "MANUAL"]
+    if not input_names or not manual_inputs:
+        return "concrete", []
+
+    status = "manual_required" if len(manual_inputs) == len(input_names) else "partial"
+    setup_notes = list(notes)
+    if status == "manual_required":
+        setup_notes.append("Manual setup required: no concrete root input values were inferred.")
+    else:
+        setup_notes.append("Partial setup: manual values required for " + ", ".join(manual_inputs) + ".")
+    return status, list(dict.fromkeys(setup_notes))
+
+
+def testcase_setup_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "target_rows": len(rows),
+        "concrete_rows": sum(1 for row in rows if row.get("setup_status") == "concrete"),
+        "partial_rows": sum(1 for row in rows if row.get("setup_status") == "partial"),
+        "manual_required_rows": sum(1 for row in rows if row.get("setup_status") == "manual_required"),
+    }
 
 
 def extract_log_var_interface(source: str) -> tuple[list[str], list[str]] | None:
@@ -422,14 +735,411 @@ def extract_log_var_interface(source: str) -> tuple[list[str], list[str]] | None
 
 
 def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str]] | None:
-    function_parameters = list(extract_first_function_definition_parameters(source))
-    ext_inputs = re.findall(r"\bEXT_SP_GLOBAL\s+\w+\s+([A-Za-z_]\w*)\s*;", source)
-    global_outputs = re.findall(r"\bGLOBAL\s+\w+\s+([A-Za-z_]\w*)\s*(?:=\s*[^;]+)?;", source)
-    input_names = list(dict.fromkeys((*function_parameters, *ext_inputs)))
-    output_names = list(dict.fromkeys(name for name in global_outputs if name not in input_names))
-    if not ext_inputs or not output_names:
+    analysis = analyze_c_interface(source)
+    input_names = list(
+        dict.fromkeys(
+            (
+                *analysis.function_parameters,
+                *analysis.ext_sp_globals,
+                *analysis.condition_input_roots,
+            )
+        )
+    )
+    output_names = list(
+        dict.fromkeys(
+            (
+                *analysis.global_outputs,
+                *analysis.ram_public,
+                *analysis.assignment_targets,
+                *analysis.condition_output_roots,
+            )
+        )
+    )
+    if not input_names or not output_names:
         return None
     return input_names, output_names
+
+
+def analyze_c_interface(source: str) -> InterfaceAnalysis:
+    clean_source = strip_comments_and_strings(source)
+    function_parameters = extract_first_function_definition_parameters(clean_source)
+    function_start = first_function_definition_start(clean_source)
+    top_level_source = clean_source[:function_start] if function_start is not None else clean_source
+    function_source = clean_source[function_start or 0 :]
+    global_order, section_by_name = extract_top_level_variables(source, top_level_source)
+    global_names = set(global_order)
+    local_names = frozenset(extract_local_variables(function_source, global_names))
+    assignment_sources, assignment_targets = extract_assignment_dependencies(function_source, global_names, set(function_parameters))
+    variable_graph = build_variable_graph(
+        clean_source,
+        function_source,
+        global_order,
+        function_parameters,
+        local_names,
+        assignment_sources,
+    )
+    decisions = extract_decisions(clean_source)
+    condition_input_roots: list[str] = []
+    condition_output_roots: list[str] = []
+    graph_root_names = set(global_order) | set(function_parameters)
+
+    for decision in decisions:
+        for condition_index, condition in enumerate(decision.conditions):
+            input_roots, output_roots = condition_root_variables(
+                condition,
+                global_names,
+                set(function_parameters),
+                assignment_sources,
+                variable_graph,
+            )
+            condition_input_roots.extend(input_roots)
+            condition_output_roots.extend(output_roots)
+            candidate = condition_candidate_lvalue(condition)
+            if candidate:
+                variable_graph.add_condition_trace(
+                    f"{decision.id}:{condition_index}",
+                    condition,
+                    candidate,
+                    graph_root_names,
+                    output_roots,
+                )
+
+    ext_sp_globals = [name for name in global_order if section_by_name.get(name) == "EXT_SP_GLOBAL"]
+    global_outputs = [name for name in global_order if section_by_name.get(name) == "GLOBAL"]
+    ram_public = [name for name in global_order if section_by_name.get(name) == "RAM_PUBLIC"]
+    ordered_assignment_targets = [name for name in global_order if name in assignment_targets]
+
+    return InterfaceAnalysis(
+        function_parameters=function_parameters,
+        global_order=global_order,
+        ext_sp_globals=tuple(ext_sp_globals),
+        global_outputs=tuple(global_outputs),
+        ram_public=tuple(ram_public),
+        local_names=local_names,
+        assignment_sources=assignment_sources,
+        assignment_targets=tuple(ordered_assignment_targets),
+        condition_input_roots=tuple(order_known_roots(condition_input_roots, global_order, function_parameters)),
+        condition_output_roots=tuple(order_known_roots(condition_output_roots, global_order, function_parameters)),
+        variable_graph=variable_graph,
+    )
+
+
+def first_function_definition_start(source: str) -> int | None:
+    function_pattern = re.compile(r"\b[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{")
+    for match in function_pattern.finditer(source):
+        if match.group(1) in KEYWORDS_WITH_DECISIONS:
+            continue
+        return match.start()
+    return None
+
+
+def extract_top_level_variables(original_source: str, top_level_source: str) -> tuple[tuple[str, ...], dict[str, str]]:
+    section_by_line: dict[int, str] = {}
+    current_section = ""
+    for line_number, line in enumerate(original_source.splitlines(), start=1):
+        section_match = re.search(r"\$(RAM_EXTERN|RAM_PUBLIC|DATA_EXTERN|DATA_PUBLIC)\$", line)
+        if section_match:
+            current_section = section_match.group(1)
+        section_by_line[line_number] = current_section
+
+    names: list[str] = []
+    sections: dict[str, str] = {}
+    declaration_pattern = re.compile(
+        r"^\s*(extern\s+)?(?:(GLOBAL|EXT_SP_GLOBAL)\s+)?(?:[A-Za-z_]\w*\s+)+\**([A-Za-z_]\w*)\s*(?:\[|=|;)"
+    )
+    for line_number, line in enumerate(top_level_source.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("{") or stripped.startswith("}"):
+            continue
+        match = declaration_pattern.match(line)
+        if match is None:
+            continue
+        name = match.group(3)
+        if name in C_TYPE_WORDS:
+            continue
+        section = match.group(2) or section_by_line.get(line_number, "")
+        names.append(name)
+        if section:
+            sections[name] = section
+    return tuple(dict.fromkeys(names)), sections
+
+
+def extract_local_variables(function_source: str, global_names: set[str]) -> set[str]:
+    local_names: set[str] = set()
+    declaration_pattern = re.compile(
+        r"(?m)^\s*(?:[A-Za-z_]\w*\s+)+(?!if\b|while\b|for\b|switch\b|return\b)([^;{}()]+);"
+    )
+    for match in declaration_pattern.finditer(function_source):
+        for declarator in match.group(1).split(","):
+            declarator = declarator.split("=")[0]
+            declarator = re.sub(r"\[[^\]]*\]", "", declarator).replace("*", " ").strip()
+            name_match = re.search(r"([A-Za-z_]\w*)\s*$", declarator)
+            if name_match and name_match.group(1) not in global_names:
+                local_names.add(name_match.group(1))
+    return local_names
+
+
+def extract_assignment_dependencies(
+    source: str,
+    global_names: set[str],
+    parameter_names: set[str],
+) -> tuple[dict[str, tuple[str, ...]], set[str]]:
+    assignment_sources: dict[str, tuple[str, ...]] = {}
+    assignment_targets: set[str] = set()
+    assignment_pattern = re.compile(
+        r"(?<![=!<>])(?P<lhs>[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?|\*\s*[A-Za-z_]\w*|\(\s*\*\s*[A-Za-z_]\w*\s*\))\s*=(?!=)\s*(?P<rhs>[^;]+);"
+    )
+    for match in assignment_pattern.finditer(source):
+        lhs = canonical_lvalue(match.group("lhs"))
+        rhs = match.group("rhs")
+        lhs_roots = resolve_root_variables(lhs, global_names, parameter_names, assignment_sources)
+        assignment_targets.update(root for root in lhs_roots if root in global_names)
+        roots = expression_root_variables(rhs, global_names, parameter_names, assignment_sources)
+        if roots:
+            assignment_sources[lhs] = tuple(dict.fromkeys(roots))
+    return assignment_sources, assignment_targets
+
+
+def build_variable_graph(
+    clean_source: str,
+    function_source: str,
+    global_order: tuple[str, ...],
+    parameter_order: tuple[str, ...],
+    local_names: frozenset[str],
+    assignment_sources: dict[str, tuple[str, ...]],
+) -> VariableGraph:
+    graph = VariableGraph()
+    add_declaration_nodes(graph, global_order, parameter_order, local_names)
+    add_assignment_edges(graph, function_source, set(global_order), set(parameter_order), assignment_sources)
+    add_condition_edges(graph, clean_source)
+    return graph
+
+
+def add_declaration_nodes(
+    graph: VariableGraph,
+    global_order: tuple[str, ...],
+    parameter_order: tuple[str, ...],
+    local_names: frozenset[str],
+) -> None:
+    for name in global_order:
+        graph.add_node(name, graph_kind_for_name(name, "global"))
+    for name in parameter_order:
+        graph.add_node(name, "param")
+    for name in sorted(local_names):
+        graph.add_node(name, graph_kind_for_name(name, "local"))
+
+
+def add_assignment_edges(
+    graph: VariableGraph,
+    function_source: str,
+    global_names: set[str],
+    parameter_names: set[str],
+    assignment_sources: dict[str, tuple[str, ...]],
+) -> None:
+    assignment_pattern = re.compile(
+        r"(?<![=!<>])(?P<lhs>[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?|\*\s*[A-Za-z_]\w*|\(\s*\*\s*[A-Za-z_]\w*\s*\))\s*=(?!=)\s*(?P<rhs>[^;]+);"
+    )
+    root_names = global_names | parameter_names
+    for match in assignment_pattern.finditer(function_source):
+        lhs = canonical_lvalue(match.group("lhs"))
+        rhs = match.group("rhs").strip()
+        line = function_source.count("\n", 0, match.start()) + 1
+        direct_sources = direct_dependency_names(rhs)
+        if not direct_sources:
+            direct_sources = assignment_sources.get(lhs, ())
+        edge_kind = "aliases" if rhs.startswith("&") else "derived_from"
+        graph.add_node(lhs, graph_kind_for_name(lhs), line=line, expression=match.group(0).strip())
+        graph.add_node(f"assignment:{line}:{lhs}", "assignment", line=line, expression=match.group(0).strip())
+        for source in direct_sources:
+            graph.add_node(source, graph_kind_for_name(source), line=line)
+            graph.add_edge(source, lhs, edge_kind, line=line, expression=match.group(0).strip())
+            graph.add_edge(source, f"assignment:{line}:{lhs}", "reads_from", line=line, expression=rhs)
+        graph.add_edge(f"assignment:{line}:{lhs}", lhs, "writes_to", line=line, expression=match.group(0).strip())
+        graph.add_dependency(lhs, tuple(direct_sources))
+        if lhs_roots := graph.trace_roots(lhs, root_names):
+            for root in lhs_roots:
+                if root in global_names:
+                    output_node = f"output:{root}"
+                    graph.add_node(output_node, "output", line=line)
+                    graph.add_edge(lhs, output_node, "writes_to", line=line, expression=match.group(0).strip())
+
+
+def add_condition_edges(graph: VariableGraph, clean_source: str) -> None:
+    for decision in extract_decisions(clean_source):
+        for condition_index, condition in enumerate(decision.conditions):
+            trace_key = f"{decision.id}:{condition_index}"
+            graph.add_node(trace_key, "condition", line=decision.line, expression=condition)
+            candidate = condition_candidate_lvalue(condition)
+            if candidate:
+                graph.add_edge(candidate, trace_key, "condition_uses", line=decision.line, expression=condition)
+
+
+def direct_dependency_names(expression: str) -> tuple[str, ...]:
+    cleaned = expression.strip()
+    address_match = re.fullmatch(r"&\s*([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?)", cleaned)
+    if address_match:
+        return (canonical_lvalue(address_match.group(1)),)
+    if cleaned.startswith("*"):
+        return (canonical_lvalue(cleaned[1:]),)
+    lvalue = canonical_lvalue(cleaned)
+    if re.fullmatch(r"[A-Za-z_]\w*(?:->|\.)[A-Za-z_]\w*", lvalue) or re.fullmatch(r"[A-Za-z_]\w*\[.+\]", lvalue):
+        return (lvalue_container_name(lvalue) or lvalue,)
+    function_calls = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", cleaned))
+    names = [
+        lvalue_container_name(canonical_lvalue(name)) or canonical_lvalue(name)
+        for name in identifiers_in_expression(cleaned)
+        if name not in function_calls
+    ]
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def condition_candidate_lvalue(condition: str) -> str | None:
+    candidate = value_for_condition(condition, True)
+    if candidate is not None:
+        return candidate[0]
+    comparison = re.search(r"(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)", condition)
+    if comparison:
+        return canonical_lvalue(comparison.group(1))
+    cleaned = condition.strip()
+    if cleaned:
+        return canonical_lvalue(cleaned)
+    return None
+
+
+def graph_kind_for_name(name: str, default: str = "local") -> str:
+    canonical = canonical_lvalue(name)
+    if canonical.startswith("*"):
+        return "pointer"
+    if re.fullmatch(r"[A-Za-z_]\w*\[.+\]", canonical):
+        return "array_root"
+    if "->" in canonical or "." in canonical:
+        return "field"
+    if canonical.startswith("assignment:"):
+        return "assignment"
+    return default
+
+
+def condition_root_variables(
+    condition: str,
+    global_names: set[str],
+    parameter_names: set[str],
+    assignment_sources: dict[str, tuple[str, ...]],
+    variable_graph: VariableGraph | None = None,
+) -> tuple[list[str], list[str]]:
+    comparison = re.search(r"(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)", condition)
+    if comparison:
+        left, _, right = comparison.groups()
+        input_roots = expression_root_variables(left, global_names, parameter_names, assignment_sources, variable_graph)
+        output_roots = expression_root_variables(right, global_names, parameter_names, assignment_sources, variable_graph)
+    else:
+        input_roots = expression_root_variables(condition, global_names, parameter_names, assignment_sources, variable_graph)
+        output_roots = []
+    return input_roots, output_roots
+
+
+def expression_root_variables(
+    expression: str,
+    global_names: set[str],
+    parameter_names: set[str],
+    assignment_sources: dict[str, tuple[str, ...]],
+    variable_graph: VariableGraph | None = None,
+) -> list[str]:
+    lvalue = canonical_lvalue(expression)
+    root_names = global_names | parameter_names
+    if variable_graph is not None:
+        graph_roots = variable_graph.trace_roots(lvalue, root_names)
+        if graph_roots:
+            return list(graph_roots)
+    lvalue_roots = resolve_root_variables(lvalue, global_names, parameter_names, assignment_sources)
+    if lvalue_roots:
+        return list(lvalue_roots)
+
+    roots: list[str] = []
+    for identifier in identifiers_in_expression(expression):
+        roots.extend(resolve_root_variables(identifier, global_names, parameter_names, assignment_sources))
+    return list(dict.fromkeys(roots))
+
+
+def resolve_root_variables(
+    name: str,
+    global_names: set[str],
+    parameter_names: set[str],
+    assignment_sources: dict[str, tuple[str, ...]],
+    seen: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
+    name = canonical_lvalue(name)
+    if name in C_TYPE_WORDS:
+        return ()
+    if name in global_names or name in parameter_names:
+        return (name,)
+    if name in seen:
+        return ()
+    if name.startswith("*"):
+        return resolve_root_variables(name[1:].strip(), global_names, parameter_names, assignment_sources, seen | {name})
+    container = lvalue_container_name(name)
+    if container and container != name:
+        return resolve_root_variables(container, global_names, parameter_names, assignment_sources, seen | {name})
+    roots: list[str] = []
+    for source_name in assignment_sources.get(name, ()):
+        roots.extend(resolve_root_variables(source_name, global_names, parameter_names, assignment_sources, seen | {name}))
+    return tuple(dict.fromkeys(roots))
+
+
+def canonical_lvalue(expression: str) -> str:
+    value = expression.strip()
+    value = strip_enclosing_parentheses(value)
+    value = re.sub(r"\s+", "", value)
+    value = strip_simple_casts(value)
+    value = strip_enclosing_parentheses(value)
+    if value.startswith("*"):
+        return "*" + canonical_lvalue(value[1:])
+    return value
+
+
+def strip_enclosing_parentheses(expression: str) -> str:
+    value = expression.strip()
+    while value.startswith("(") and value.endswith(")"):
+        close_paren = find_matching_paren(value, 0)
+        if close_paren != len(value) - 1:
+            break
+        value = value[1:-1].strip()
+    return value
+
+
+def strip_simple_casts(expression: str) -> str:
+    value = expression
+    cast_pattern = re.compile(r"^\((?:const|volatile|signed|unsigned|struct\s+\w+|[A-Za-z_]\w+|\s|\*)+\)")
+    while True:
+        match = cast_pattern.match(value)
+        if match is None:
+            return value
+        value = value[match.end() :].strip()
+
+
+def lvalue_container_name(lvalue: str) -> str | None:
+    array_match = re.fullmatch(r"([A-Za-z_]\w*)\[.+\]", lvalue)
+    if array_match:
+        return array_match.group(1)
+    field_match = re.fullmatch(r"([A-Za-z_]\w*)(?:->|\.).+", lvalue)
+    if field_match:
+        return field_match.group(1)
+    return None
+
+
+def identifiers_in_expression(expression: str) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            identifier for identifier in IDENTIFIER_PATTERN.findall(expression) if identifier not in C_TYPE_WORDS
+        )
+    )
+
+
+def order_known_roots(roots: list[str], global_order: tuple[str, ...], parameter_order: tuple[str, ...]) -> list[str]:
+    wanted = set(roots)
+    ordered = [name for name in parameter_order if name in wanted]
+    ordered.extend(name for name in global_order if name in wanted and name not in ordered)
+    ordered.extend(name for name in roots if name not in ordered)
+    return ordered
 
 
 def extract_first_function_definition_parameters(source: str) -> tuple[str, ...]:
@@ -523,7 +1233,7 @@ def targetlink_mcdc_interface_inputs(
             )
             continue
 
-        source_input = targetlink_source_input_for_condition(condition)
+        source_input = targetlink_source_input_for_condition(condition, report.source_text, input_names)
         if source_input is None:
             continue
 
@@ -549,6 +1259,68 @@ def targetlink_mcdc_interface_inputs(
     return scenarios
 
 
+def targetlink_generic_interface_inputs(report: MCDCReport, input_names: list[str]) -> list[dict[str, Any]] | None:
+    if not input_names:
+        return None
+    analysis = analyze_c_interface(report.source_text)
+    root_names = set(analysis.global_order) | set(analysis.function_parameters)
+    scenarios: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[tuple[str, TableValue], ...], bool]] = set()
+
+    for decision in report.decisions:
+        for row in decision.cases:
+            inputs = {name: report.manual_inputs.get(name, "MANUAL") for name in input_names}
+            notes = list(row.notes)
+            for condition_index, (condition, desired) in enumerate(zip(decision.decision.conditions, row.values)):
+                candidate = value_for_condition(condition, desired)
+                if candidate is None:
+                    continue
+                candidate_name, value = candidate
+                trace_key = f"{decision.decision.id}:{condition_index}"
+                trace = analysis.variable_graph.condition_traces.get(trace_key)
+                roots = tuple(trace.get("roots", ())) if trace else ()
+                if not roots:
+                    roots = resolve_root_variables(
+                        candidate_name,
+                        set(analysis.global_order),
+                        set(analysis.function_parameters),
+                        analysis.assignment_sources,
+                    )
+                assignable_roots = [root for root in roots if root in inputs]
+                if len(assignable_roots) != 1:
+                    if len(assignable_roots) > 1:
+                        notes.append(
+                            f"MANUAL: ambiguous roots [{', '.join(assignable_roots)}] for `{candidate_name}`."
+                        )
+                    continue
+                root = assignable_roots[0]
+                if root in inputs:
+                    inputs[root] = value
+                    if root != candidate_name:
+                        chain = trace.get("chain", []) if trace else analysis.variable_graph.trace_chain(candidate_name, root_names)
+                        notes.append(f"`{condition}` traced {' -> '.join(chain)}.")
+            key = (
+                decision.decision.id,
+                tuple((name, inputs[name]) for name in input_names),
+                row.decision_result,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            scenarios.append(
+                {
+                    "inputs": inputs,
+                    "decision_id": decision.decision.id,
+                    "line": decision.decision.line,
+                    "mcdc_condition_values": list(row.values),
+                    "decision_result": row.decision_result,
+                    "covers": list(row.covers),
+                    "notes": notes,
+                }
+            )
+    return scenarios or None
+
+
 def targetlink_baseline_inputs() -> dict[str, int]:
     return {
         "f_canrxok": 1,
@@ -563,7 +1335,18 @@ def targetlink_baseline_inputs() -> dict[str, int]:
     }
 
 
-def targetlink_source_input_for_condition(condition: str) -> str | None:
+def targetlink_source_input_for_condition(condition: str, source: str = "", input_names: list[str] | None = None) -> str | None:
+    if source and input_names is not None:
+        analysis = analyze_c_interface(source)
+        input_roots, _ = condition_root_variables(
+            condition,
+            set(analysis.global_order),
+            set(analysis.function_parameters),
+            analysis.assignment_sources,
+        )
+        for root in input_roots:
+            if root in input_names:
+                return root
     return {
         "Sa2_Sum7 > 124.996F": "VU16srs_pitch_fdrx",
         "Sa2_Sum6 > 124.996F": "VU16srs_roll_fdrx",
@@ -1397,8 +2180,8 @@ def replace_condition_occurrences(
     return replaced
 
 
-def concretize_conditions(conditions: tuple[str, ...], values: tuple[bool, ...]) -> tuple[dict[str, int | bool], tuple[str, ...]]:
-    assignments: dict[str, int | bool] = {}
+def concretize_conditions(conditions: tuple[str, ...], values: tuple[bool, ...]) -> tuple[dict[str, TableValue], tuple[str, ...]]:
+    assignments: dict[str, TableValue] = {}
     notes: list[str] = []
 
     for condition, desired in zip(conditions, values):
@@ -1416,7 +2199,7 @@ def concretize_conditions(conditions: tuple[str, ...], values: tuple[bool, ...])
     return assignments, tuple(notes)
 
 
-def value_for_condition(condition: str, desired: bool) -> tuple[str, int | bool] | None:
+def value_for_condition(condition: str, desired: bool) -> tuple[str, TableValue] | None:
     cleaned = condition.strip()
     negated = False
     while cleaned.startswith("!"):
@@ -1424,16 +2207,51 @@ def value_for_condition(condition: str, desired: bool) -> tuple[str, int | bool]
         cleaned = cleaned[1:].strip()
 
     desired = desired if not negated else not desired
-    match = re.fullmatch(r"([A-Za-z_]\w*)\s*(==|!=|>=|<=|>|<)\s*(-?\d+)", cleaned)
+    numeric_literal = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:[fFlLuU]*)"
+    lhs_pattern = r"(.+?)"
+    match = re.fullmatch(rf"{lhs_pattern}\s*(==|!=|>=|<=|>|<)\s*{numeric_literal}", cleaned)
     if match:
         name, operator, literal_text = match.groups()
-        literal = int(literal_text)
-        return name, candidate_integer(operator, literal, desired)
+        literal = parse_c_numeric_literal(literal_text)
+        return canonical_lvalue(name), candidate_number(operator, literal, desired)
 
-    if re.fullmatch(r"[A-Za-z_]\w*", cleaned):
-        return cleaned, desired
+    if re.fullmatch(r"[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?", cleaned):
+        return canonical_lvalue(cleaned), desired
+    pointer_match = re.fullmatch(r"\(?\s*\*\s*([A-Za-z_]\w*)\s*\)?", cleaned)
+    if pointer_match:
+        return "*" + pointer_match.group(1), desired
 
     return None
+
+
+def parse_c_numeric_literal(literal_text: str) -> int | float:
+    cleaned = re.sub(r"[fFlLuU]+$", "", literal_text)
+    if "." in cleaned or "e" in cleaned.lower():
+        return float(cleaned)
+    return int(cleaned)
+
+
+def candidate_number(operator: str, literal: int | float, desired: bool) -> int | float:
+    if isinstance(literal, float):
+        return candidate_float(operator, literal, desired)
+    return candidate_integer(operator, literal, desired)
+
+
+def candidate_float(operator: str, literal: float, desired: bool) -> float:
+    step = 1.0
+    if operator == ">":
+        return literal + step if desired else literal
+    if operator == ">=":
+        return literal if desired else literal - step
+    if operator == "<":
+        return literal - step if desired else literal
+    if operator == "<=":
+        return literal if desired else literal + step
+    if operator == "==":
+        return literal if desired else literal + step
+    if operator == "!=":
+        return literal + step if desired else literal
+    raise ValueError(f"Unsupported operator: {operator}")
 
 
 def candidate_integer(operator: str, literal: int, desired: bool) -> int:
