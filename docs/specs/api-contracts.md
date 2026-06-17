@@ -124,7 +124,7 @@ For TargetLink-style generated C, the table uses the declared interface:
 
 - target function parameters are parameter candidates.
 - `EXT_SP_GLOBAL` declarations are input candidates.
-- `$RAM_EXTERN$` declarations are not automatically inputs; they become input columns when decision conditions read them directly or through traced local assignments.
+- `$RAM_EXTERN$` declarations are runtime inputs, even when they are only used by fallback/output assignments and not directly by a decision condition.
 - `$DATA_PUBLIC$` declarations are parameter candidates, and simple numeric initializers are copied into generated rows.
 - `$RAM_PUBLIC$`, `GLOBAL`, and globals written by the target function are output candidates.
 - local variables are traced to root globals where possible and are not emitted as table columns. The local data-flow pass handles simple assignments, function-call-derived locals, array reads, field reads, pointer aliases such as `p = &global`, and dereferences such as `local = *p`.
@@ -187,7 +187,7 @@ Workbook layout:
 - worksheet name is `name`.
 - filename is `<name>.xlsx`.
 - rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`.
-- row 5 groups `Inputs`, `Outputs`, and `Comment`.
-- row 6 contains vertical testcase column headers.
+- row 5 groups `Inputs`, `Parameters`, `Outputs`, and `Comment`.
+- row 6 contains vertical testcase column headers, including expanded array columns from all three groups.
 - testcase data starts at row 7.
 - when LibreOffice is available locally, the generated `.xlsx` is normalized through headless LibreOffice before download to improve SharePoint / Excel Online compatibility.

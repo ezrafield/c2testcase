@@ -84,8 +84,10 @@ class InterfaceAnalysis:
     function_parameters: tuple[str, ...]
     global_order: tuple[str, ...]
     ext_sp_globals: tuple[str, ...]
+    ram_extern: tuple[str, ...]
     global_outputs: tuple[str, ...]
     ram_public: tuple[str, ...]
+    data_extern: tuple[str, ...]
     data_public: tuple[str, ...]
     local_names: frozenset[str]
     array_sizes: dict[str, int]
@@ -923,12 +925,16 @@ def extract_log_var_interface(source: str) -> tuple[list[str], list[str], list[s
 
 def extract_targetlink_declared_interface(source: str) -> tuple[list[str], list[str], list[str], dict[str, int], dict[str, Any]] | None:
     analysis = analyze_c_interface(source)
-    parameter_names = list(dict.fromkeys((*analysis.function_parameters, *analysis.data_public)))
+    parameter_names = list(dict.fromkeys((*analysis.function_parameters, *analysis.data_extern, *analysis.data_public)))
     parameter_set = set(parameter_names)
     input_names = list(
         dict.fromkeys(
             name
-            for name in (*analysis.ext_sp_globals, *analysis.condition_input_roots)
+            for name in (
+                *analysis.ext_sp_globals,
+                *analysis.ram_extern,
+                *analysis.condition_input_roots,
+            )
             if name not in parameter_set
         )
     )
@@ -995,8 +1001,10 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
                 )
 
     ext_sp_globals = [name for name in global_order if section_by_name.get(name) == "EXT_SP_GLOBAL"]
+    ram_extern = [name for name in global_order if section_by_name.get(name) == "RAM_EXTERN"]
     global_outputs = [name for name in global_order if section_by_name.get(name) == "GLOBAL"]
     ram_public = [name for name in global_order if section_by_name.get(name) == "RAM_PUBLIC"]
+    data_extern = [name for name in global_order if section_by_name.get(name) == "DATA_EXTERN"]
     data_public = [name for name in global_order if section_by_name.get(name) == "DATA_PUBLIC"]
     ordered_assignment_targets = [name for name in global_order if name in assignment_targets]
 
@@ -1004,8 +1012,10 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
         function_parameters=function_parameters,
         global_order=global_order,
         ext_sp_globals=tuple(ext_sp_globals),
+        ram_extern=tuple(ram_extern),
         global_outputs=tuple(global_outputs),
         ram_public=tuple(ram_public),
+        data_extern=tuple(data_extern),
         data_public=tuple(data_public),
         local_names=local_names,
         array_sizes=dict(array_sizes),
@@ -1747,7 +1757,7 @@ def xlsx_styles() -> str:
   </fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="8">
+  <cellXfs count="10">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
     <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
@@ -1756,6 +1766,8 @@ def xlsx_styles() -> str:
     <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
     <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
     <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
   <dxfs count="0"/>
@@ -1767,9 +1779,9 @@ def xlsx_styles() -> str:
 def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
     metadata = metadata or ExcelExportMetadata()
     sheet_rows = excel_export_rows(rows, metadata)
-    output_start = find_output_start(rows[0]) if rows else 1
+    section_by_column = excel_section_by_column(sheet_rows[4]) if len(sheet_rows) >= 5 else {}
     row_xml = "\n".join(
-        xlsx_row(index, row, output_start=output_start)
+        xlsx_row(index, row, section_by_column=section_by_column)
         for index, row in enumerate(sheet_rows, start=1)
     )
     widths = "".join(
@@ -1818,39 +1830,59 @@ def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
     return [*row, *([""] * max(width - len(row), 0))]
 
 
-def find_output_start(group_row: list[TableValue]) -> int:
+def excel_section_by_column(group_row: list[TableValue]) -> dict[int, str]:
+    section_by_column: dict[int, str] = {}
+    current_section = "Mode"
     for index, value in enumerate(group_row, start=1):
-        if value == "Outputs":
-            return index
-    return len(group_row) + 1
+        if value in {"Inputs", "Parameters", "Outputs", "Comment"}:
+            current_section = str(value)
+        section_by_column[index] = current_section
+    return section_by_column
 
 
-def xlsx_row(row_index: int, row: list[TableValue], output_start: int = 1) -> str:
+def xlsx_row(row_index: int, row: list[TableValue], section_by_column: dict[int, str] | None = None) -> str:
+    section_by_column = section_by_column or {}
     cells = "".join(
-        xlsx_cell(row_index, column_index, value, style=xlsx_style_for_cell(row_index, column_index, output_start, len(row)))
+        xlsx_cell(
+            row_index,
+            column_index,
+            value,
+            style=xlsx_style_for_cell(row_index, column_index, section_by_column, len(row)),
+        )
         for column_index, value in enumerate(row, start=1)
     )
     height_attr = ' ht="90" customHeight="1"' if row_index == 6 else ""
     return f'    <row r="{row_index}"{height_attr}>{cells}</row>'
 
 
-def xlsx_style_for_cell(row_index: int, column_index: int, output_start: int, column_count: int) -> int:
+def xlsx_style_for_cell(
+    row_index: int,
+    column_index: int,
+    section_by_column: dict[int, str],
+    column_count: int,
+) -> int:
     if row_index <= 4:
         return 1
     if row_index == 5:
         if column_index == column_count:
-            return 4
-        if column_index >= output_start:
+            return 8
+        section = section_by_column.get(column_index)
+        if section == "Outputs":
             return 3
-        if column_index >= 2:
+        if section == "Parameters":
+            return 4
+        if section == "Inputs":
             return 2
         return 1
     if row_index == 6:
         if column_index == column_count:
             return 7
-        if column_index >= output_start:
+        section = section_by_column.get(column_index)
+        if section == "Outputs":
             return 6
-        if column_index >= 2:
+        if section == "Parameters":
+            return 9
+        if section == "Inputs":
             return 5
         return 1
     return 0
