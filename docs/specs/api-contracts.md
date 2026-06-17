@@ -178,3 +178,4 @@ Workbook layout:
 - row 5 groups `Inputs`, `Outputs`, and `Comment`.
 - row 6 contains vertical testcase column headers.
 - testcase data starts at row 7.
+- when LibreOffice is available locally, the generated `.xlsx` is normalized through headless LibreOffice before download to improve SharePoint / Excel Online compatibility.
