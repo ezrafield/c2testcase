@@ -1,7 +1,10 @@
 from pathlib import Path
+import shutil
+import subprocess
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
+from src.services import mcdc_generator
 from src.services.mcdc_generator import (
     ExcelExportMetadata,
     extract_decisions,
@@ -533,6 +536,39 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
     assert "<tableStyles" in styles_xml
     assert "sample.c:1:f " in sheet_xml
     assert 'xml:space="preserve"' in sheet_xml
+
+
+def test_excel_export_can_be_normalized_by_libreoffice_when_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_path = tmp_path / "normalized.xlsx"
+    calls: list[list[str]] = []
+
+    def fake_run(command, check, capture_output, text, timeout):
+        calls.append(list(command))
+        output_dir = Path(command[command.index("--outdir") + 1])
+        source_path = Path(command[-1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, output_dir / source_path.name)
+        return subprocess.CompletedProcess(command, 0, "convert ok", "")
+
+    monkeypatch.setattr(mcdc_generator, "find_libreoffice_executable", lambda: "soffice")
+    monkeypatch.setattr(mcdc_generator.subprocess, "run", fake_run)
+
+    write_testcase_workbook_rows(
+        [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
+        output_path,
+        ExcelExportMetadata(name="LibreOffice_Format"),
+    )
+
+    assert calls
+    command = calls[0]
+    assert command[0] == "soffice"
+    assert "--headless" in command
+    assert "--convert-to" in command
+    assert "xlsx" in command
+    assert output_path.exists()
 
 
 def test_summarizes_missing_llvm_coverage_tools() -> None:

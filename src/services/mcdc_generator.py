@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 from xml.sax.saxutils import escape, quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
@@ -434,6 +435,7 @@ def write_testcase_workbook_rows(
     rows: list[list[TableValue]],
     output_path: Path,
     metadata: ExcelExportMetadata | None = None,
+    normalize_with_libreoffice: bool = True,
 ) -> None:
     metadata = metadata or ExcelExportMetadata()
     with ZipFile(output_path, "w", ZIP_DEFLATED) as workbook:
@@ -445,6 +447,63 @@ def write_testcase_workbook_rows(
         workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
         workbook.writestr("xl/styles.xml", xlsx_styles())
         workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows, metadata))
+    if normalize_with_libreoffice:
+        normalize_xlsx_with_libreoffice(output_path)
+
+
+def normalize_xlsx_with_libreoffice(workbook_path: Path) -> bool:
+    executable = find_libreoffice_executable()
+    if executable is None:
+        return False
+    with TemporaryDirectory(prefix="c2testcase-libreoffice-") as tmp:
+        workspace = Path(tmp)
+        output_dir = workspace / "out"
+        user_install_dir = workspace / "profile"
+        output_dir.mkdir()
+        user_install_dir.mkdir()
+        command = [
+            executable,
+            "--headless",
+            "--nologo",
+            "--nodefault",
+            "--nofirststartwizard",
+            "--nolockcheck",
+            f"-env:UserInstallation={user_install_dir.resolve().as_uri()}",
+            "--convert-to",
+            "xlsx",
+            "--outdir",
+            str(output_dir),
+            str(workbook_path.resolve()),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        converted_path = output_dir / workbook_path.name
+        if result.returncode != 0 or not converted_path.exists():
+            return False
+        shutil.copyfile(converted_path, workbook_path)
+        return True
+
+
+def find_libreoffice_executable() -> str | None:
+    for executable in ("soffice", "libreoffice"):
+        path = shutil.which(executable)
+        if path:
+            return path
+    for path in (
+        Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+        Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+    ):
+        if path.exists():
+            return str(path)
+    return None
 
 
 def testcase_table_rows_from_dict(

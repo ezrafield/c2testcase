@@ -94,6 +94,8 @@ Workflow:
 
 The Excel filename and worksheet name come from the export `Name` field.
 
+Excel export is written as strict OOXML. If LibreOffice is installed (`soffice` on PATH, or the usual Windows LibreOffice install path), the app automatically round-trips the generated workbook through LibreOffice headless before returning it. That produces a workbook package closer to what LibreOffice, SharePoint, and Excel Online expect. If LibreOffice is not installed, export still works with the built-in writer.
+
 ## Testcase Table Semantics
 
 `Testcase_table` is the canonical tabular output used by the UI and Excel export.
