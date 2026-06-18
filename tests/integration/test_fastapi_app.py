@@ -230,6 +230,9 @@ def test_web_app_exports_csv_from_testcase_table() -> None:
                     ],
                 }
             },
+            "format_version": "2.5",
+            "architecture": "CSV Architecture [C-Code]",
+            "scope": "logic.c:1:logic",
             "name": "CSV_READY",
             "fill_manual_for_btc": True,
         },
@@ -239,7 +242,11 @@ def test_web_app_exports_csv_from_testcase_table() -> None:
     assert export_response.status_code == 200
     assert export_payload["filename"] == "CSV_READY.csv"
     csv_text = base64.b64decode(export_payload["download"]).decode("utf-8-sig")
-    assert "Mode,Inputs,Inputs,Parameters,Outputs" in csv_text
-    assert "Step,a,missing,cal,y" in csv_text
-    assert "0,0,0,2,0" in csv_text
+    assert "Format Version,2.5,,,," in csv_text
+    assert "Architecture,CSV Architecture [C-Code],,,," in csv_text
+    assert "Scope,logic.c:1:logic,,,," in csv_text
+    assert "Name,CSV_READY,,,," in csv_text
+    assert "Mode,Inputs,Inputs,Parameters,Outputs," in csv_text
+    assert "Step,a,missing,cal,y,Comment" in csv_text
+    assert "0,0,0,2,0," in csv_text
     assert "MANUAL" not in csv_text

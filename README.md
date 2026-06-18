@@ -19,7 +19,7 @@ The web UI additionally provides:
 
 - `Testcase_table`: input/output columns and testcase rows.
 - `Export Excel`: downloads a SIL-style `.xlsx` workbook with metadata rows, group/header rows, comment column, and testcase data from `Testcase_table`.
-- `Export CSV`: downloads the current `Testcase_table` rows as a plain CSV file using the export `Name` field.
+- `Export CSV`: downloads the same SIL-style metadata/header/testcase data as Excel in CSV form using the export `Name` field.
 - `BTC fill MANUAL`: a toggle that replaces displayed/exported `MANUAL` cells with BTC-friendly fallback values.
 - `Ccode_interface`: split C source/detail view showing highlighted decision lines, testcase steps, reasons, input/output values, graph traces, and setup notes.
 

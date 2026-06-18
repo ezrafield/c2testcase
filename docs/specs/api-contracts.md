@@ -198,7 +198,14 @@ Workbook layout:
 POST /api/export-csv
 ```
 
-Exports the current `report.testcase_table` rows as CSV. The CSV mirrors the `Testcase_table` export rows: row 1 contains group headers, row 2 contains column names, and row 3 onward contains testcase data. Excel metadata rows are not included.
+Exports the current `report.testcase_table` rows as CSV using the same SIL-style data template as Excel.
+
+CSV layout:
+
+- rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; `B1` is emitted as the numeric format version text.
+- row 5 groups `Inputs`, `Parameters`, and `Outputs`; the trailing comment column is blank on this row.
+- row 6 contains testcase column headers, including expanded array columns from all three groups, plus `Comment` in the final column.
+- testcase data starts at row 7.
 
 When `fill_manual_for_btc` is true, every `MANUAL` testcase cell is replaced with the smallest numeric value already present in that same input/parameter/output column. Columns with no numeric value use `0`. The source `report` is not modified.
 
@@ -206,6 +213,9 @@ Request:
 ```json
 {
   "report": {"testcase_table": {"input_columns": [], "parameter_columns": [], "output_columns": [], "rows": []}},
+  "format_version": "1.3",
+  "architecture": "IO_CANII03AD5D24CNV_OSM_CSKN_10_egkn_EP [C-Code]",
+  "scope": "io-canii03ad5d24cnv-osm-cskn-1.c:1:J_canrv_03ad5d24_cnvt",
   "name": "SIL_SV_ATG_1",
   "fill_manual_for_btc": false
 }
