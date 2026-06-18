@@ -25,10 +25,10 @@ Accepts a multipart form with:
 - `input_variables`: optional comma-separated extra input columns or defaults, such as `gear=D`.
 - `output_variables`: optional comma-separated output columns or defaults.
 - `compile_flags`: optional compile flags recorded in the report.
-- `excel_format_version`: accepted for compatibility with older export forms; plain table Excel export no longer writes metadata rows.
-- `excel_architecture`: accepted for compatibility with older export forms; plain table Excel export no longer writes metadata rows.
-- `excel_scope`: accepted for compatibility with older export forms; plain table Excel export no longer writes metadata rows.
-- `excel_name`: becomes the `.xlsx` filename and worksheet name.
+- `excel_format_version`: value written to Excel cell `B1` as a numeric float, default `1.3`.
+- `excel_architecture`: text written to row 2 of the Excel export.
+- `excel_scope`: text written to row 3 of the Excel export.
+- `excel_name`: text written to row 4 of the Excel export. This also becomes the `.xlsx` filename and worksheet name.
 - `max_conditions`: condition enumeration cap.
 - `mcdc_mode`: `unique-cause`, `masking`, or `multicondition`.
 
@@ -149,7 +149,7 @@ The root page exposes these report views:
 - `JSON`: raw `mcdc_cases.json`.
 - `Harness`: generated C harness scaffold.
 - `Testcase_table`: tabular testcase input/output rows.
-- `Export Excel`: opens an export panel with a blank `Name` field plus `Export Excel` and `Export CSV` actions. Both exports use data from `Testcase_table`; the downloaded Excel file, worksheet, and CSV file use `Name`. Excel content is a plain workbook version of the CSV/table rows.
+- `Export Excel`: opens an export panel with blank `Format Version`, `Architecture`, `Scope`, and `Name` fields plus `Export Excel` and `Export CSV` actions. Both exports use data from `Testcase_table`; the downloaded Excel file, worksheet, and CSV file use `Name`. Excel keeps the SIL-style metadata/header template while avoiding extra visual design.
 - `BTC fill MANUAL`: toggles display/export replacement of `MANUAL` cells with per-column minimal numeric values, or `0` when no numeric value exists. This does not change row `setup_status` or report evidence.
 - `Ccode_interface`: split source/detail view. The left pane highlights decision lines; the right pane shows testcase step, covered condition reason, input values, outputs, condition truth values, and notes. The source and detail panes scroll independently.
 
@@ -158,7 +158,7 @@ The root page exposes these report views:
 POST /api/export-excel
 ```
 
-Exports the current `report.testcase_table` as a plain `.xlsx` workbook. The web `Export Excel` button calls this endpoint at click time. `name` controls the downloaded filename and worksheet name; other metadata fields are accepted for compatibility but are not written into the sheet.
+Exports the current `report.testcase_table` as a SIL-style `.xlsx` workbook. The web `Export Excel` button calls this endpoint at click time, so users may edit metadata fields after generation and before export.
 
 When `fill_manual_for_btc` is true, every `MANUAL` testcase cell in the exported workbook is replaced by the smallest numeric value already present in that same input/parameter/output column. Columns with no numeric value use `0`. The source `report` is not modified.
 
@@ -186,10 +186,11 @@ Workbook layout:
 
 - worksheet name is `name`.
 - filename is `<name>.xlsx`.
-- row 1 contains the same group headers as CSV: `Mode`, `Inputs`, `Parameters`, and `Outputs`.
-- row 2 contains testcase column headers, including expanded array columns.
-- testcase data starts at row 3.
-- no metadata rows, comment column, merged cells, colors, freeze panes, auto-filter, or rotated header styling are added.
+- rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; cell `B1` is always numeric.
+- row 5 groups `Inputs`, `Parameters`, and `Outputs`; the trailing comment column is blank on this row.
+- row 6 contains testcase column headers, including expanded array columns from all three groups, plus `Comment` in the final column.
+- testcase data starts at row 7.
+- no merged cells, colors, freeze panes, auto-filter, or rotated header styling are added.
 - when LibreOffice is available locally, the generated `.xlsx` is normalized through headless LibreOffice before download to improve SharePoint / Excel Online compatibility.
 
 ## Export CSV

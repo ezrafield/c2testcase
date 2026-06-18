@@ -616,6 +616,18 @@ def render_index_html() -> str:
         <p class="export-note">Note: this export gets data from Testcase_table.</p>
         <div class="export-grid">
           <div>
+            <label for="excel_format_version">Excel Format Version</label>
+            <input id="excel_format_version" type="text">
+          </div>
+          <div>
+            <label for="excel_architecture">Excel Architecture</label>
+            <input id="excel_architecture" type="text">
+          </div>
+          <div>
+            <label for="excel_scope">Excel Scope</label>
+            <input id="excel_scope" type="text">
+          </div>
+          <div>
             <label for="excel_name">Excel Name</label>
             <input id="excel_name" type="text">
           </div>
@@ -845,7 +857,7 @@ def render_index_html() -> str:
       excelExportSubmit.disabled = !state.report;
       csvExportSubmit.disabled = !state.report;
       excelExportStatus.textContent = state.report
-        ? (state.btcFillManual ? "BTC fill is on: MANUAL cells export as per-column minimal values or 0." : "Name controls the exported filename and Excel sheet name.")
+        ? (state.btcFillManual ? "BTC fill is on: MANUAL cells export as per-column minimal values or 0." : "")
         : "Generate cases before exporting Excel.";
     }
 
@@ -1164,6 +1176,9 @@ def render_index_html() -> str:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           report: state.report,
+          format_version: document.getElementById("excel_format_version").value,
+          architecture: document.getElementById("excel_architecture").value,
+          scope: document.getElementById("excel_scope").value,
           name: document.getElementById("excel_name").value,
           fill_manual_for_btc: state.btcFillManual,
         }),

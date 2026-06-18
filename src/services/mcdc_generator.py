@@ -1770,7 +1770,8 @@ def xlsx_styles() -> str:
 
 
 def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
-    sheet_rows = rows or [[""]]
+    metadata = metadata or ExcelExportMetadata()
+    sheet_rows = excel_export_rows(rows, metadata)
     row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(sheet_rows, start=1))
     last_column = column_name(max(len(row) for row in sheet_rows))
     dimension = f"A1:{last_column}{len(sheet_rows)}"
@@ -1782,6 +1783,35 @@ def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | Non
   </sheetData>
 </worksheet>
 """
+
+
+def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadata) -> list[list[TableValue]]:
+    if not rows:
+        rows = [[""], [""]]
+    max_columns = len(rows[1]) + 1 if len(rows) > 1 else len(rows[0]) + 1
+    return [
+        pad_row(["Format Version", excel_format_version_number(metadata.format_version)], max_columns),
+        pad_row(["Architecture", metadata.architecture], max_columns),
+        pad_row(["Scope", metadata.scope], max_columns),
+        pad_row(["Name", metadata.name], max_columns),
+        pad_row([*rows[0], ""], max_columns),
+        pad_row([*rows[1], "Comment"], max_columns),
+        *[pad_row(row, max_columns) for row in rows[2:]],
+    ]
+
+
+def excel_format_version_number(format_version: str) -> float:
+    try:
+        value = float(str(format_version).strip())
+    except (TypeError, ValueError):
+        return 1.3
+    if not math.isfinite(value):
+        return 1.3
+    return value
+
+
+def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
+    return [*row, *([""] * max(width - len(row), 0))]
 
 
 def xlsx_row(row_index: int, row: list[TableValue]) -> str:

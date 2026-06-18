@@ -18,7 +18,7 @@ Given a `.c` file and optional headers, the tool emits:
 The web UI additionally provides:
 
 - `Testcase_table`: input/output columns and testcase rows.
-- `Export Excel`: downloads the current `Testcase_table` rows as a plain `.xlsx` workbook; the export `Name` field controls the filename and worksheet name.
+- `Export Excel`: downloads a SIL-style `.xlsx` workbook with metadata rows, group/header rows, comment column, and testcase data from `Testcase_table`.
 - `Export CSV`: downloads the current `Testcase_table` rows as a plain CSV file using the export `Name` field.
 - `BTC fill MANUAL`: a toggle that replaces displayed/exported `MANUAL` cells with BTC-friendly fallback values.
 - `Ccode_interface`: split C source/detail view showing highlighted decision lines, testcase steps, reasons, input/output values, graph traces, and setup notes.
@@ -91,11 +91,11 @@ Workflow:
 4. Inspect `Testcase_table`.
 5. Use `Ccode_interface` to inspect which testcase rows cover each highlighted decision line.
 6. Optional: turn on `BTC fill MANUAL` when the workbook or CSV must avoid literal `MANUAL` cells for BTC Embedded import.
-7. Click `Export Excel`, fill `Name` if you want a specific filename, then export the workbook or CSV file.
+7. Click `Export Excel`, fill the metadata fields, then export the workbook or CSV file.
 
 The Excel filename, worksheet name, and CSV filename come from the export `Name` field.
 
-Excel export is written as strict OOXML with the same plain rows as CSV: group header row, column header row, then testcase rows. It does not add metadata rows, a comment column, merged cells, colors, filters, freeze panes, or rotated header styling. If LibreOffice is installed (`soffice` on PATH, or the usual Windows LibreOffice install path), the app automatically round-trips the generated workbook through LibreOffice headless before returning it. That produces a workbook package closer to what LibreOffice, SharePoint, and Excel Online expect. If LibreOffice is not installed, export still works with the built-in writer.
+Excel export is written as strict OOXML with the full SIL-style data template: `Format Version`, `Architecture`, `Scope`, `Name`, group headers, column headers, `Comment`, then testcase rows. It intentionally avoids extra visual design such as merged cells, colors, filters, freeze panes, or rotated header styling. If LibreOffice is installed (`soffice` on PATH, or the usual Windows LibreOffice install path), the app automatically round-trips the generated workbook through LibreOffice headless before returning it. That produces a workbook package closer to what LibreOffice, SharePoint, and Excel Online expect. If LibreOffice is not installed, export still works with the built-in writer.
 
 ## Testcase Table Semantics
 
