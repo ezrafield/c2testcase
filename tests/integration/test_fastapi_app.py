@@ -26,6 +26,9 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "Export Excel" in response.text
     assert "Export CSV" in response.text
     assert "Ccode_interface" in response.text
+    assert "Excel Format Version" in response.text
+    assert "Excel Architecture" in response.text
+    assert "Excel Scope" in response.text
     assert "Excel Name" in response.text
     assert "BTC fill MANUAL: off" in response.text
     assert "btc_fill_toggle" in response.text
@@ -33,10 +36,10 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "state.btcFillManual" in response.text
     assert "parameter_columns" in response.text
     assert "Parameters" in response.text
+    assert '<input id="excel_format_version" type="text">' in response.text
+    assert '<input id="excel_architecture" type="text">' in response.text
+    assert '<input id="excel_scope" type="text">' in response.text
     assert '<input id="excel_name" type="text">' in response.text
-    assert "excel_format_version" not in response.text
-    assert "excel_architecture" not in response.text
-    assert "excel_scope" not in response.text
     assert "#99ccff" in response.text
     assert "testcase-table" in response.text
     assert "excel-export-panel" in response.text
@@ -163,14 +166,14 @@ def test_web_app_exports_excel_with_user_metadata() -> None:
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
     assert 'name="SIL_SV_ATG_2"' in workbook_xml
-    assert "Format Version" not in sheet_xml
-    assert "Example Architecture [C-Code]" not in sheet_xml
-    assert "logic.c:1:logic" not in sheet_xml
-    assert "SIL_SV_ATG_2" not in sheet_xml
+    assert "Format Version" in sheet_xml
+    assert "Example Architecture [C-Code]" in sheet_xml
+    assert "logic.c:1:logic" in sheet_xml
+    assert "SIL_SV_ATG_2" in sheet_xml
     assert "Step" in sheet_xml
     assert "Inputs" in sheet_xml
     assert "Outputs" in sheet_xml
-    assert "Comment" not in sheet_xml
+    assert sheet_xml.count("Comment") == 1
 
 
 def test_web_app_exports_excel_with_btc_manual_fill() -> None:
