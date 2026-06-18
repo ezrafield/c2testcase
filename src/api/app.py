@@ -14,6 +14,7 @@ from src.services.mcdc_generator import (
     generate_mcdc_report,
     safe_excel_filename,
     testcase_table_rows_from_dict,
+    testcase_table_rows_to_csv,
     write_report_artifacts,
     write_testcase_workbook_rows,
 )
@@ -137,6 +138,22 @@ async def export_excel(payload: dict[str, object] = Body(...)) -> dict[str, str]
             "filename": excel_path.name,
             "download": base64.b64encode(excel_path.read_bytes()).decode("ascii"),
         }
+
+
+@app.post("/api/export-csv")
+async def export_csv(payload: dict[str, object] = Body(...)) -> dict[str, str]:
+    report = payload.get("report")
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=400, detail="report is required.")
+    name = str(payload.get("name") or "mcdc_testcases").strip() or "mcdc_testcases"
+    fill_manual_for_btc = bool(payload.get("fill_manual_for_btc"))
+    csv_text = testcase_table_rows_to_csv(
+        testcase_table_rows_from_dict(report, fill_manual_for_btc=fill_manual_for_btc)
+    )
+    return {
+        "filename": f"{safe_excel_filename(name)}.csv",
+        "download": base64.b64encode(csv_text.encode("utf-8-sig")).decode("ascii"),
+    }
 
 
 def parse_compile_flags(raw_flags: str) -> tuple[str, ...]:
@@ -374,6 +391,12 @@ def render_index_html() -> str:
       gap: 0 14px;
       max-width: 860px;
     }
+    .export-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
     .export-note {
       margin: 0 0 14px;
       color: var(--muted);
@@ -593,23 +616,14 @@ def render_index_html() -> str:
         <p class="export-note">Note: this export gets data from Testcase_table.</p>
         <div class="export-grid">
           <div>
-            <label for="excel_format_version">Excel Format Version</label>
-            <input id="excel_format_version" type="text">
-          </div>
-          <div>
-            <label for="excel_architecture">Excel Architecture</label>
-            <input id="excel_architecture" type="text">
-          </div>
-          <div>
-            <label for="excel_scope">Excel Scope</label>
-            <input id="excel_scope" type="text">
-          </div>
-          <div>
             <label for="excel_name">Excel Name</label>
             <input id="excel_name" type="text">
           </div>
         </div>
-        <button id="excel_export_submit" class="export-action" type="button">Export</button>
+        <div class="export-actions">
+          <button id="excel_export_submit" class="export-action" type="button">Export Excel</button>
+          <button id="csv_export_submit" class="export-action" type="button">Export CSV</button>
+        </div>
         <div id="excel_export_status" class="export-status"></div>
       </div>
       <div id="ccode-interface" class="ccode-wrap"></div>
@@ -623,6 +637,7 @@ def render_index_html() -> str:
     const testcaseTable = document.getElementById("testcase-table");
     const excelExportPanel = document.getElementById("excel-export-panel");
     const excelExportSubmit = document.getElementById("excel_export_submit");
+    const csvExportSubmit = document.getElementById("csv_export_submit");
     const excelExportStatus = document.getElementById("excel_export_status");
     const btcFillToggle = document.getElementById("btc_fill_toggle");
     const ccodeInterface = document.getElementById("ccode-interface");
@@ -688,6 +703,7 @@ def render_index_html() -> str:
     });
 
     excelExportSubmit.addEventListener("click", exportExcel);
+    csvExportSubmit.addEventListener("click", exportCsv);
     btcFillToggle.addEventListener("click", () => {
       state.btcFillManual = !state.btcFillManual;
       renderBtcFillToggle();
@@ -827,8 +843,9 @@ def render_index_html() -> str:
       excelExportPanel.style.display = "block";
       ccodeInterface.style.display = "none";
       excelExportSubmit.disabled = !state.report;
+      csvExportSubmit.disabled = !state.report;
       excelExportStatus.textContent = state.report
-        ? (state.btcFillManual ? "BTC fill is on: MANUAL cells export as per-column minimal values or 0." : "")
+        ? (state.btcFillManual ? "BTC fill is on: MANUAL cells export as per-column minimal values or 0." : "Name controls the exported filename and Excel sheet name.")
         : "Generate cases before exporting Excel.";
     }
 
@@ -1147,9 +1164,6 @@ def render_index_html() -> str:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           report: state.report,
-          format_version: document.getElementById("excel_format_version").value,
-          architecture: document.getElementById("excel_architecture").value,
-          scope: document.getElementById("excel_scope").value,
           name: document.getElementById("excel_name").value,
           fill_manual_for_btc: state.btcFillManual,
         }),
@@ -1167,6 +1181,44 @@ def render_index_html() -> str:
       state.downloads[payload.filename] = payload.download;
       const bytes = Uint8Array.from(atob(payload.download), (char) => char.charCodeAt(0));
       const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = payload.filename;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      excelExportStatus.textContent = `Downloaded ${payload.filename}.`;
+    }
+
+    async function exportCsv() {
+      if (!state.report) {
+        artifact.style.display = "block";
+        testcaseTable.style.display = "none";
+        excelExportPanel.style.display = "none";
+        ccodeInterface.style.display = "none";
+        artifact.textContent = "Generate cases before exporting CSV.";
+        return;
+      }
+      const response = await fetch("/api/export-csv", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          report: state.report,
+          name: document.getElementById("excel_name").value,
+          fill_manual_for_btc: state.btcFillManual,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        artifact.style.display = "block";
+        testcaseTable.style.display = "none";
+        excelExportPanel.style.display = "none";
+        ccodeInterface.style.display = "none";
+        artifact.textContent = payload.detail || "CSV export failed.";
+        return;
+      }
+      state.downloads[payload.filename] = payload.download;
+      const bytes = Uint8Array.from(atob(payload.download), (char) => char.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "text/csv;charset=utf-8" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = payload.filename;

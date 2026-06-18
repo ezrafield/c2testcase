@@ -14,6 +14,7 @@ from src.services.mcdc_generator import (
     summarize_coverage_readiness,
     testcase_table_rows as build_testcase_table_rows,
     testcase_table_rows_from_dict as build_testcase_table_rows_from_dict,
+    testcase_table_rows_to_csv as build_testcase_table_rows_csv,
     value_for_condition,
     write_report_artifacts,
     write_testcase_workbook_rows,
@@ -165,6 +166,19 @@ def test_testcase_table_can_fill_manual_values_for_btc_export() -> None:
         [1, -2, 5, 0, 3, 1],
     ]
     assert "MANUAL" not in [cell for row in btc_rows[2:] for cell in row]
+
+
+def test_testcase_table_rows_can_be_written_as_csv() -> None:
+    rows = [
+        ["Mode", "Inputs", "Outputs"],
+        ["Step", "a", "comment"],
+        [0, "A,B", 'quote "x"'],
+    ]
+
+    assert (
+        build_testcase_table_rows_csv(rows)
+        == 'Mode,Inputs,Outputs\r\nStep,a,comment\r\n0,"A,B","quote ""x"""\r\n'
+    )
 
 
 def test_testcase_table_columns_default_to_c_function_inputs(tmp_path: Path) -> None:
@@ -494,12 +508,12 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "x" in sheet_xml
     assert "manual_input" in sheet_xml
     assert "99" in sheet_xml
-    assert "Format Version" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert "Format Version" not in sheet_xml
+    assert "Comment" not in sheet_xml
     assert "<mergeCells" not in sheet_xml
 
 
-def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> None:
+def test_excel_export_uses_metadata_name_and_plain_table_layout(tmp_path: Path) -> None:
     source = tmp_path / "sample.c"
     source.write_text("int f(int ready,int x){ if (ready && x > 2) return 1; return 0; }")
 
@@ -522,49 +536,47 @@ def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> No
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
     assert 'name="SIL_SV_ATG_1"' in workbook_xml
-    assert "Format Version" in sheet_xml
-    assert "Example Architecture [C-Code]" in sheet_xml
-    assert "sample.c:1:f" in sheet_xml
-    assert "SIL_SV_ATG_1" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert "Format Version" not in sheet_xml
+    assert "Example Architecture [C-Code]" not in sheet_xml
+    assert "sample.c:1:f" not in sheet_xml
+    assert "SIL_SV_ATG_1" not in sheet_xml
+    assert "Comment" not in sheet_xml
     assert "<mergeCells" not in sheet_xml
-    assert 'topLeftCell="A7"' in sheet_xml
+    assert "<autoFilter" not in sheet_xml
+    assert "<pane" not in sheet_xml
+    assert "Step" in sheet_xml
+    assert "Inputs" in sheet_xml
+    assert "Outputs" in sheet_xml
 
 
-def test_excel_export_writes_format_version_as_number(tmp_path: Path) -> None:
-    output_path = tmp_path / "format-version.xlsx"
+def test_excel_export_omits_metadata_rows(tmp_path: Path) -> None:
+    output_path = tmp_path / "plain.xlsx"
 
     write_testcase_workbook_rows(
         [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
         output_path,
-        ExcelExportMetadata(format_version="3.4", name="Format_Number"),
+        ExcelExportMetadata(
+            format_version="3.4",
+            architecture="Architecture",
+            scope="scope.c:1:f",
+            name="Plain_Table",
+        ),
         normalize_with_libreoffice=False,
     )
 
     with ZipFile(output_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
 
-    assert '<c r="B1" s="1"><v>3.4</v></c>' in sheet_xml
-    assert '<c r="B1" t="inlineStr"' not in sheet_xml
+    assert '<c r="A1" t="inlineStr"><is><t>Mode</t></is></c>' in sheet_xml
+    assert '<c r="B1" t="inlineStr"><is><t>Inputs</t></is></c>' in sheet_xml
+    assert '<c r="A2" t="inlineStr"><is><t>Step</t></is></c>' in sheet_xml
+    assert '<c r="B3"><v>1</v></c>' in sheet_xml
+    assert "Format Version" not in sheet_xml
+    assert "Architecture" not in sheet_xml
+    assert "scope.c:1:f" not in sheet_xml
 
 
-def test_excel_export_uses_numeric_default_for_invalid_format_version(tmp_path: Path) -> None:
-    output_path = tmp_path / "format-version-default.xlsx"
-
-    write_testcase_workbook_rows(
-        [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
-        output_path,
-        ExcelExportMetadata(format_version="abc", name="Format_Default"),
-        normalize_with_libreoffice=False,
-    )
-
-    with ZipFile(output_path) as workbook:
-        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
-
-    assert '<c r="B1" s="1"><v>1.3</v></c>' in sheet_xml
-
-
-def test_excel_export_styles_inputs_parameters_outputs_sections(tmp_path: Path) -> None:
+def test_excel_export_keeps_inputs_parameters_outputs_as_plain_cells(tmp_path: Path) -> None:
     output_path = tmp_path / "sections.xlsx"
 
     write_testcase_workbook_rows(
@@ -582,17 +594,11 @@ def test_excel_export_styles_inputs_parameters_outputs_sections(tmp_path: Path) 
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
         styles_xml = workbook.read("xl/styles.xml").decode()
 
-    assert 'count="10"' in styles_xml
+    assert '<cellXfs count="1">' in styles_xml
     assert "Parameters" in sheet_xml
-    assert 'r="B5" t="inlineStr" s="2"' in sheet_xml
-    assert 'r="C5" t="inlineStr" s="4"' in sheet_xml
-    assert 'r="D5" t="inlineStr" s="3"' in sheet_xml
-    assert 'r="E5" t="inlineStr" s="8"><is><t></t></is></c>' in sheet_xml
-    assert 'r="B6" t="inlineStr" s="5"' in sheet_xml
-    assert 'r="C6" t="inlineStr" s="9"' in sheet_xml
-    assert 'r="D6" t="inlineStr" s="6"' in sheet_xml
-    assert 'r="E6" t="inlineStr" s="7"><is><t>Comment</t></is></c>' in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert ' s="' not in sheet_xml
+    assert "Comment" not in sheet_xml
+    assert "<autoFilter" not in sheet_xml
     assert "<mergeCells" not in sheet_xml
 
 
@@ -633,7 +639,11 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
     assert "<cellStyles" in styles_xml
     assert "<dxfs" in styles_xml
     assert "<tableStyles" in styles_xml
-    assert "sample.c:1:f " in sheet_xml
+    assert "sample.c:1:f " not in sheet_xml
+    assert "Format Version" not in sheet_xml
+    assert "Comment" not in sheet_xml
+    assert "<autoFilter" not in sheet_xml
+    assert "<pane" not in sheet_xml
     assert 'xml:space="preserve"' in sheet_xml
 
 

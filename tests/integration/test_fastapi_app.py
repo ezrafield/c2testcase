@@ -24,10 +24,8 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert response.status_code == 200
     assert "Testcase_table" in response.text
     assert "Export Excel" in response.text
+    assert "Export CSV" in response.text
     assert "Ccode_interface" in response.text
-    assert "Excel Format Version" in response.text
-    assert "Excel Architecture" in response.text
-    assert "Excel Scope" in response.text
     assert "Excel Name" in response.text
     assert "BTC fill MANUAL: off" in response.text
     assert "btc_fill_toggle" in response.text
@@ -35,14 +33,16 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
     assert "state.btcFillManual" in response.text
     assert "parameter_columns" in response.text
     assert "Parameters" in response.text
-    assert '<input id="excel_format_version" type="text">' in response.text
-    assert '<input id="excel_architecture" type="text">' in response.text
-    assert '<input id="excel_scope" type="text">' in response.text
     assert '<input id="excel_name" type="text">' in response.text
+    assert "excel_format_version" not in response.text
+    assert "excel_architecture" not in response.text
+    assert "excel_scope" not in response.text
     assert "#99ccff" in response.text
     assert "testcase-table" in response.text
     assert "excel-export-panel" in response.text
     assert "excel_export_submit" in response.text
+    assert "csv_export_submit" in response.text
+    assert "/api/export-csv" in response.text
     assert "Note: this export gets data from Testcase_table." in response.text
     assert "export-action" in response.text
     assert 'state.active = "excel_export"' in response.text
@@ -163,10 +163,14 @@ def test_web_app_exports_excel_with_user_metadata() -> None:
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
     assert 'name="SIL_SV_ATG_2"' in workbook_xml
-    assert "Format Version" in sheet_xml
-    assert "Example Architecture [C-Code]" in sheet_xml
-    assert "logic.c:1:logic" in sheet_xml
-    assert "SIL_SV_ATG_2" in sheet_xml
+    assert "Format Version" not in sheet_xml
+    assert "Example Architecture [C-Code]" not in sheet_xml
+    assert "logic.c:1:logic" not in sheet_xml
+    assert "SIL_SV_ATG_2" not in sheet_xml
+    assert "Step" in sheet_xml
+    assert "Inputs" in sheet_xml
+    assert "Outputs" in sheet_xml
+    assert "Comment" not in sheet_xml
 
 
 def test_web_app_exports_excel_with_btc_manual_fill() -> None:
@@ -198,3 +202,41 @@ def test_web_app_exports_excel_with_btc_manual_fill() -> None:
     assert "MANUAL" not in sheet_xml
     assert "-2" in sheet_xml
     assert "<v>0</v>" in sheet_xml
+
+
+def test_web_app_exports_csv_from_testcase_table() -> None:
+    client = TestClient(app)
+
+    export_response = client.post(
+        "/api/export-csv",
+        json={
+            "report": {
+                "testcase_table": {
+                    "input_columns": ["a", "missing"],
+                    "parameter_columns": ["cal"],
+                    "output_columns": ["y"],
+                    "input_column_keys": ["a", "missing"],
+                    "parameter_column_keys": ["cal[0]"],
+                    "output_column_keys": ["y"],
+                    "rows": [
+                        {
+                            "inputs": {"a": "MANUAL", "missing": "MANUAL"},
+                            "parameters": {"cal[0]": 2},
+                            "outputs": {"y": "MANUAL"},
+                        }
+                    ],
+                }
+            },
+            "name": "CSV_READY",
+            "fill_manual_for_btc": True,
+        },
+    )
+    export_payload = export_response.json()
+
+    assert export_response.status_code == 200
+    assert export_payload["filename"] == "CSV_READY.csv"
+    csv_text = base64.b64decode(export_payload["download"]).decode("utf-8-sig")
+    assert "Mode,Inputs,Inputs,Parameters,Outputs" in csv_text
+    assert "Step,a,missing,cal,y" in csv_text
+    assert "0,0,0,2,0" in csv_text
+    assert "MANUAL" not in csv_text

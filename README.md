@@ -2,7 +2,7 @@
 
 `c2testcase` is a local, CPU-friendly MC/DC testcase generation tool for C source files.
 
-It extracts C decisions, generates best-effort MC/DC target rows, builds a first-class `Testcase_table`, exports BTC/SIL-style Excel workbooks, and provides a web UI that links highlighted C source lines to testcase evidence.
+It extracts C decisions, generates best-effort MC/DC target rows, builds a first-class `Testcase_table`, exports BTC/SIL-style Excel workbooks and CSV files, and provides a web UI that links highlighted C source lines to testcase evidence.
 
 The project is deterministic and dependency-light. It does **not** claim compiler-confirmed 100% MC/DC for arbitrary C. It separates generated MC/DC target coverage from executable/concrete testcase readiness so gaps stay visible instead of being hidden behind guessed inputs.
 
@@ -18,7 +18,8 @@ Given a `.c` file and optional headers, the tool emits:
 The web UI additionally provides:
 
 - `Testcase_table`: input/output columns and testcase rows.
-- `Export Excel`: a metadata form for `Format Version`, `Architecture`, `Scope`, and `Name`; export uses the current `Testcase_table`.
+- `Export Excel`: downloads the current `Testcase_table` rows as a plain `.xlsx` workbook; the export `Name` field controls the filename and worksheet name.
+- `Export CSV`: downloads the current `Testcase_table` rows as a plain CSV file using the export `Name` field.
 - `BTC fill MANUAL`: a toggle that replaces displayed/exported `MANUAL` cells with BTC-friendly fallback values.
 - `Ccode_interface`: split C source/detail view showing highlighted decision lines, testcase steps, reasons, input/output values, graph traces, and setup notes.
 
@@ -89,16 +90,16 @@ Workflow:
 3. Generate cases.
 4. Inspect `Testcase_table`.
 5. Use `Ccode_interface` to inspect which testcase rows cover each highlighted decision line.
-6. Optional: turn on `BTC fill MANUAL` when the workbook must avoid literal `MANUAL` cells for BTC Embedded import.
-7. Click `Export Excel`, fill the four metadata fields, then export the workbook.
+6. Optional: turn on `BTC fill MANUAL` when the workbook or CSV must avoid literal `MANUAL` cells for BTC Embedded import.
+7. Click `Export Excel`, fill `Name` if you want a specific filename, then export the workbook or CSV file.
 
-The Excel filename and worksheet name come from the export `Name` field.
+The Excel filename, worksheet name, and CSV filename come from the export `Name` field.
 
-Excel export is written as strict OOXML. If LibreOffice is installed (`soffice` on PATH, or the usual Windows LibreOffice install path), the app automatically round-trips the generated workbook through LibreOffice headless before returning it. That produces a workbook package closer to what LibreOffice, SharePoint, and Excel Online expect. If LibreOffice is not installed, export still works with the built-in writer.
+Excel export is written as strict OOXML with the same plain rows as CSV: group header row, column header row, then testcase rows. It does not add metadata rows, a comment column, merged cells, colors, filters, freeze panes, or rotated header styling. If LibreOffice is installed (`soffice` on PATH, or the usual Windows LibreOffice install path), the app automatically round-trips the generated workbook through LibreOffice headless before returning it. That produces a workbook package closer to what LibreOffice, SharePoint, and Excel Online expect. If LibreOffice is not installed, export still works with the built-in writer.
 
 ## Testcase Table Semantics
 
-`Testcase_table` is the canonical tabular output used by the UI and Excel export.
+`Testcase_table` is the canonical tabular output used by the UI, Excel export, and CSV export.
 
 For ordinary C logic:
 
@@ -137,7 +138,7 @@ if (mixed > 5U) { ... }
 
 Many input pairs can satisfy `mixed > 5U`, so the tool keeps `a` and `b` as `MANUAL` and marks the row `manual_required` rather than guessing.
 
-The `BTC fill MANUAL` toggle is only an export/display compatibility layer. When it is on, each `MANUAL` cell is replaced by the smallest numeric value already present in the same input/output column. If the column has no numeric value, the fallback is `0`. The underlying report still keeps `setup_status`, `setup_notes`, and original unresolved reasoning so manual setup risk remains visible.
+The `BTC fill MANUAL` toggle is only an export/display compatibility layer. When it is on, each `MANUAL` cell is replaced by the smallest numeric value already present in the same input/parameter/output column. If the column has no numeric value, the fallback is `0`. The underlying report still keeps `setup_status`, `setup_notes`, and original unresolved reasoning so manual setup risk remains visible.
 
 ## Interface Graph
 
