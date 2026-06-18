@@ -187,10 +187,10 @@ Workbook layout:
 - worksheet name is `name`.
 - filename is `<name>.xlsx`.
 - rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; cell `B1` is always numeric.
-- row 5 groups `Inputs`, `Parameters`, and `Outputs`; the trailing comment column is blank on this row.
-- row 6 contains testcase column headers, including expanded array columns from all three groups, plus `Comment` in the final column.
+- row 5 groups `Inputs`, `Parameters`, and `Outputs`; repeated group cells are blank and the final column contains `Comment`.
+- row 6 contains testcase column headers, including expanded array columns from all three groups; the final comment column is blank.
 - testcase data starts at row 7.
-- no merged cells, colors, freeze panes, auto-filter, or rotated header styling are added.
+- the final comment column is merged across rows 5-6, matching the base SIL template; no freeze panes or auto-filter are added.
 - when LibreOffice is available locally, the generated `.xlsx` is normalized through headless LibreOffice before download to improve SharePoint / Excel Online compatibility.
 
 ## Export CSV
@@ -203,8 +203,8 @@ Exports the current `report.testcase_table` rows as CSV using the same SIL-style
 CSV layout:
 
 - rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; `B1` is emitted as the numeric format version text.
-- row 5 groups `Inputs`, `Parameters`, and `Outputs`; the trailing comment column is blank on this row.
-- row 6 contains testcase column headers, including expanded array columns from all three groups, plus `Comment` in the final column.
+- row 5 groups `Inputs`, `Parameters`, and `Outputs`; repeated group cells are blank and the final column contains `Comment`.
+- row 6 contains testcase column headers, including expanded array columns from all three groups; the final comment column is blank.
 - testcase data starts at row 7.
 
 When `fill_manual_for_btc` is true, every `MANUAL` testcase cell is replaced with the smallest numeric value already present in that same input/parameter/output column. Columns with no numeric value use `0`. The source `report` is not modified.

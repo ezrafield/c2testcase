@@ -1752,19 +1752,23 @@ def xlsx_workbook_rels() -> str:
 def xlsx_styles() -> str:
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
-  <fills count="2">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-  </fills>
+  <numFmts count="0"/>
+  <fonts count="2"><font><sz val="11.0"/><color indexed="8"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><name val="Calibri"/><sz val="11.0"/></font></fonts>
+  <fills count="12"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="darkGray"/></fill><fill><patternFill patternType="none"><fgColor indexed="44"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="44"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="9"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="9"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="22"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="22"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="55"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="55"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="23"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="23"/></patternFill></fill></fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="1">
+  <cellXfs count="10">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
   </cellXfs>
-  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-  <dxfs count="0"/>
-  <tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
 </styleSheet>
 """
 
@@ -1772,15 +1776,22 @@ def xlsx_styles() -> str:
 def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
     metadata = metadata or ExcelExportMetadata()
     sheet_rows = excel_export_rows(rows, metadata)
-    row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(sheet_rows, start=1))
+    sections = excel_section_by_column(sheet_rows[4])
+    row_xml = "\n".join(
+        xlsx_row(index, row, section_by_column=sections)
+        for index, row in enumerate(sheet_rows, start=1)
+    )
     last_column = column_name(max(len(row) for row in sheet_rows))
-    dimension = f"A1:{last_column}{len(sheet_rows)}"
+    comment_merge = f"{last_column}5:{last_column}6"
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="{dimension}"/>
+  <dimension ref="A1"/>
+  <sheetViews><sheetView workbookViewId="0" tabSelected="true"/></sheetViews>
+  <cols><col min="1" max="1" width="15.625" customWidth="true"/><col min="{len(sheet_rows[0])}" max="{len(sheet_rows[0])}" width="39.0625" customWidth="true"/></cols>
   <sheetData>
 {row_xml}
   </sheetData>
+  <mergeCells><mergeCell ref="{comment_merge}"/></mergeCells>
 </worksheet>
 """
 
@@ -1789,15 +1800,30 @@ def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadat
     if not rows:
         rows = [[""], [""]]
     max_columns = len(rows[1]) + 1 if len(rows) > 1 else len(rows[0]) + 1
+    group_row = collapse_excel_group_headers(rows[0])
     return [
         pad_row(["Format Version", excel_format_version_number(metadata.format_version)], max_columns),
         pad_row(["Architecture", metadata.architecture], max_columns),
         pad_row(["Scope", metadata.scope], max_columns),
         pad_row(["Name", metadata.name], max_columns),
-        pad_row([*rows[0], ""], max_columns),
-        pad_row([*rows[1], "Comment"], max_columns),
+        pad_row([*group_row, "Comment"], max_columns),
+        pad_row([*rows[1], ""], max_columns),
         *[pad_row(row, max_columns) for row in rows[2:]],
     ]
+
+
+def collapse_excel_group_headers(row: list[TableValue]) -> list[TableValue]:
+    collapsed: list[TableValue] = []
+    previous_section = object()
+    for value in row:
+        if value in {"Inputs", "Parameters", "Outputs"}:
+            collapsed.append(value if value != previous_section else "")
+            previous_section = value
+            continue
+        collapsed.append(value)
+        if value:
+            previous_section = value
+    return collapsed
 
 
 def excel_format_version_number(format_version: str) -> float:
@@ -1814,17 +1840,73 @@ def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
     return [*row, *([""] * max(width - len(row), 0))]
 
 
-def xlsx_row(row_index: int, row: list[TableValue]) -> str:
+def excel_section_by_column(group_row: list[TableValue]) -> dict[int, str]:
+    sections: dict[int, str] = {}
+    current = "Mode"
+    for index, value in enumerate(group_row, start=1):
+        if value in {"Inputs", "Parameters", "Outputs"}:
+            current = str(value)
+        sections[index] = current
+    return sections
+
+
+def xlsx_row(
+    row_index: int,
+    row: list[TableValue],
+    section_by_column: dict[int, str] | None = None,
+) -> str:
+    section_by_column = section_by_column or {}
     cells = "".join(
-        xlsx_cell(row_index, column_index, value)
+        xlsx_cell(
+            row_index,
+            column_index,
+            value,
+            style=xlsx_style_for_cell(row_index, column_index, len(row), section_by_column),
+        )
         for column_index, value in enumerate(row, start=1)
     )
-    return f'    <row r="{row_index}">{cells}</row>'
+    height_attr = ' ht="90.0" customHeight="true"' if row_index == 6 else ""
+    return f'    <row r="{row_index}"{height_attr}>{cells}</row>'
+
+
+def xlsx_style_for_cell(
+    row_index: int,
+    column_index: int,
+    column_count: int,
+    section_by_column: dict[int, str],
+) -> int:
+    if row_index <= 4:
+        return 1
+    if row_index == 5:
+        if column_index == column_count:
+            return 1
+        section = section_by_column.get(column_index)
+        if section == "Inputs":
+            return 2
+        if section == "Parameters":
+            return 3
+        if section == "Outputs":
+            return 5
+        return 1
+    if row_index == 6:
+        if column_index == column_count:
+            return 1
+        section = section_by_column.get(column_index)
+        if section == "Inputs":
+            return 6
+        if section == "Parameters":
+            return 7
+        if section == "Outputs":
+            return 9
+        return 1
+    return 0
 
 
 def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
     reference = f"{column_name(column_index)}{row_index}"
     style_attr = f' s="{style}"' if style else ""
+    if value == "":
+        return f'<c r="{reference}"{style_attr}/>'
     if isinstance(value, bool):
         return f'<c r="{reference}" t="b"{style_attr}><v>{int(value)}</v></c>'
     if isinstance(value, int | float):
