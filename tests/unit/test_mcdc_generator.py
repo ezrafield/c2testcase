@@ -531,6 +531,39 @@ def test_excel_export_uses_metadata_name_and_sample_layout(tmp_path: Path) -> No
     assert 'topLeftCell="A7"' in sheet_xml
 
 
+def test_excel_export_writes_format_version_as_number(tmp_path: Path) -> None:
+    output_path = tmp_path / "format-version.xlsx"
+
+    write_testcase_workbook_rows(
+        [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
+        output_path,
+        ExcelExportMetadata(format_version="3.4", name="Format_Number"),
+        normalize_with_libreoffice=False,
+    )
+
+    with ZipFile(output_path) as workbook:
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+
+    assert '<c r="B1" s="1"><v>3.4</v></c>' in sheet_xml
+    assert '<c r="B1" t="inlineStr"' not in sheet_xml
+
+
+def test_excel_export_uses_numeric_default_for_invalid_format_version(tmp_path: Path) -> None:
+    output_path = tmp_path / "format-version-default.xlsx"
+
+    write_testcase_workbook_rows(
+        [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
+        output_path,
+        ExcelExportMetadata(format_version="abc", name="Format_Default"),
+        normalize_with_libreoffice=False,
+    )
+
+    with ZipFile(output_path) as workbook:
+        sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+
+    assert '<c r="B1" s="1"><v>1.3</v></c>' in sheet_xml
+
+
 def test_excel_export_styles_inputs_parameters_outputs_sections(tmp_path: Path) -> None:
     output_path = tmp_path / "sections.xlsx"
 

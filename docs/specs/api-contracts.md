@@ -25,7 +25,7 @@ Accepts a multipart form with:
 - `input_variables`: optional comma-separated extra input columns or defaults, such as `gear=D`.
 - `output_variables`: optional comma-separated output columns or defaults.
 - `compile_flags`: optional compile flags recorded in the report.
-- `excel_format_version`: text written to row 1 of the Excel export, default `1.3`.
+- `excel_format_version`: value written to Excel cell `B1` as a numeric float, default `1.3`.
 - `excel_architecture`: text written to row 2 of the Excel export.
 - `excel_scope`: text written to row 3 of the Excel export.
 - `excel_name`: text written to row 4 of the Excel export. This also becomes the `.xlsx` filename and worksheet name.
@@ -186,7 +186,7 @@ Workbook layout:
 
 - worksheet name is `name`.
 - filename is `<name>.xlsx`.
-- rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`.
+- rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; cell `B1` is always numeric.
 - row 5 groups `Inputs`, `Parameters`, `Outputs`, and a merged `Comment` column.
 - row 6 contains vertical testcase column headers, including expanded array columns from all three groups. The merged `Comment` column does not repeat `Comment` in row 6.
 - testcase data starts at row 7.
