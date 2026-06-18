@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
 from itertools import product
+from io import StringIO
 import json
 import math
 import os
@@ -584,6 +586,13 @@ def testcase_table_rows_from_dict(
             ]
         )
     return rows
+
+
+def testcase_table_rows_to_csv(rows: list[list[TableValue]]) -> str:
+    output = StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerows(rows)
+    return output.getvalue()
 
 
 def manual_value_fallbacks(table: dict[str, Any]) -> dict[str, dict[str, TableValue]]:
@@ -1743,32 +1752,15 @@ def xlsx_workbook_rels() -> str:
 def xlsx_styles() -> str:
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="2">
-    <font><sz val="11"/><name val="Calibri"/></font>
-    <font><b/><color rgb="FF000000"/><sz val="11"/><name val="Calibri"/></font>
-  </fonts>
-  <fills count="7">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="2">
     <fill><patternFill patternType="none"/></fill>
     <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFF4B183"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF1F2937"/><bgColor indexed="64"/></patternFill></fill>
   </fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="10">
+  <cellXfs count="1">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-    <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="6" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment textRotation="90"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
   <dxfs count="0"/>
@@ -1778,123 +1770,26 @@ def xlsx_styles() -> str:
 
 
 def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
-    metadata = metadata or ExcelExportMetadata()
-    sheet_rows = excel_export_rows(rows, metadata)
-    section_by_column = excel_section_by_column(sheet_rows[4]) if len(sheet_rows) >= 5 else {}
-    row_xml = "\n".join(
-        xlsx_row(index, row, section_by_column=section_by_column)
-        for index, row in enumerate(sheet_rows, start=1)
-    )
-    widths = "".join(
-        f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
-        for index, width in enumerate(column_widths(sheet_rows), start=1)
-    )
-    last_column = column_name(len(sheet_rows[0]))
+    sheet_rows = rows or [[""]]
+    row_xml = "\n".join(xlsx_row(index, row) for index, row in enumerate(sheet_rows, start=1))
+    last_column = column_name(max(len(row) for row in sheet_rows))
     dimension = f"A1:{last_column}{len(sheet_rows)}"
-    filter_dimension = f"A6:{last_column}{len(sheet_rows)}"
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="{dimension}"/>
-  <sheetViews>
-    <sheetView workbookViewId="0">
-      <pane ySplit="6" topLeftCell="A7" activePane="bottomLeft" state="frozen"/>
-    </sheetView>
-  </sheetViews>
-  <cols>{widths}</cols>
   <sheetData>
 {row_xml}
   </sheetData>
-  <autoFilter ref="{filter_dimension}"/>
 </worksheet>
 """
 
 
-def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadata) -> list[list[TableValue]]:
-    if not rows:
-        return []
-    max_columns = len(rows[1]) + 1 if len(rows) > 1 else len(rows[0]) + 1
-    padded_rows = [
-        pad_row(["Format Version", excel_format_version_number(metadata.format_version)], max_columns),
-        pad_row(["Architecture", metadata.architecture], max_columns),
-        pad_row(["Scope", metadata.scope], max_columns),
-        pad_row(["Name", metadata.name], max_columns),
-    ]
-    group_row = pad_row([*rows[0], ""], max_columns)
-    header_row = pad_row([*rows[1], "Comment"], max_columns)
-    data_rows = [pad_row(row, max_columns) for row in rows[2:]]
-    return [*padded_rows, group_row, header_row, *data_rows]
-
-
-def excel_format_version_number(format_version: str) -> float:
-    try:
-        value = float(str(format_version).strip())
-    except (TypeError, ValueError):
-        return 1.3
-    if not math.isfinite(value):
-        return 1.3
-    return value
-
-
-def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
-    return [*row, *([""] * max(width - len(row), 0))]
-
-
-def excel_section_by_column(group_row: list[TableValue]) -> dict[int, str]:
-    section_by_column: dict[int, str] = {}
-    current_section = "Mode"
-    for index, value in enumerate(group_row, start=1):
-        if value in {"Inputs", "Parameters", "Outputs"}:
-            current_section = str(value)
-        section_by_column[index] = current_section
-    return section_by_column
-
-
-def xlsx_row(row_index: int, row: list[TableValue], section_by_column: dict[int, str] | None = None) -> str:
-    section_by_column = section_by_column or {}
+def xlsx_row(row_index: int, row: list[TableValue]) -> str:
     cells = "".join(
-        xlsx_cell(
-            row_index,
-            column_index,
-            value,
-            style=xlsx_style_for_cell(row_index, column_index, section_by_column, len(row)),
-        )
+        xlsx_cell(row_index, column_index, value)
         for column_index, value in enumerate(row, start=1)
     )
-    height_attr = ' ht="90" customHeight="1"' if row_index == 6 else ""
-    return f'    <row r="{row_index}"{height_attr}>{cells}</row>'
-
-
-def xlsx_style_for_cell(
-    row_index: int,
-    column_index: int,
-    section_by_column: dict[int, str],
-    column_count: int,
-) -> int:
-    if row_index <= 4:
-        return 1
-    if row_index == 5:
-        if column_index == column_count:
-            return 8
-        section = section_by_column.get(column_index)
-        if section == "Outputs":
-            return 3
-        if section == "Parameters":
-            return 4
-        if section == "Inputs":
-            return 2
-        return 1
-    if row_index == 6:
-        if column_index == column_count:
-            return 7
-        section = section_by_column.get(column_index)
-        if section == "Outputs":
-            return 6
-        if section == "Parameters":
-            return 9
-        if section == "Inputs":
-            return 5
-        return 1
-    return 0
+    return f'    <row r="{row_index}">{cells}</row>'
 
 
 def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
@@ -1931,14 +1826,6 @@ def is_xml_character(character: str) -> bool:
         or 0xE000 <= codepoint <= 0xFFFD
         or 0x10000 <= codepoint <= 0x10FFFF
     )
-
-
-def column_widths(rows: list[list[TableValue]]) -> list[int]:
-    widths: list[int] = []
-    for column in range(len(rows[0])):
-        max_length = max(len(str(row[column])) for row in rows)
-        widths.append(max(10, min(max_length + 2, 48)))
-    return widths
 
 
 def column_name(index: int) -> str:
