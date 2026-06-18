@@ -11,6 +11,7 @@ from src.api.routes import health
 from src.services.mcdc_generator import (
     ExcelExportMetadata,
     MCDC_MODES,
+    excel_export_rows,
     generate_mcdc_report,
     safe_excel_filename,
     testcase_table_rows_from_dict,
@@ -145,13 +146,21 @@ async def export_csv(payload: dict[str, object] = Body(...)) -> dict[str, str]:
     report = payload.get("report")
     if not isinstance(report, dict):
         raise HTTPException(status_code=400, detail="report is required.")
-    name = str(payload.get("name") or "mcdc_testcases").strip() or "mcdc_testcases"
+    metadata = ExcelExportMetadata(
+        format_version=str(payload.get("format_version") or "1.3").strip() or "1.3",
+        architecture=str(payload.get("architecture") or "").strip(),
+        scope=str(payload.get("scope") or "").strip(),
+        name=str(payload.get("name") or "mcdc_testcases").strip() or "mcdc_testcases",
+    )
     fill_manual_for_btc = bool(payload.get("fill_manual_for_btc"))
     csv_text = testcase_table_rows_to_csv(
-        testcase_table_rows_from_dict(report, fill_manual_for_btc=fill_manual_for_btc)
+        excel_export_rows(
+            testcase_table_rows_from_dict(report, fill_manual_for_btc=fill_manual_for_btc),
+            metadata,
+        )
     )
     return {
-        "filename": f"{safe_excel_filename(name)}.csv",
+        "filename": f"{safe_excel_filename(metadata.name)}.csv",
         "download": base64.b64encode(csv_text.encode("utf-8-sig")).decode("ascii"),
     }
 
@@ -1218,6 +1227,9 @@ def render_index_html() -> str:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           report: state.report,
+          format_version: document.getElementById("excel_format_version").value,
+          architecture: document.getElementById("excel_architecture").value,
+          scope: document.getElementById("excel_scope").value,
           name: document.getElementById("excel_name").value,
           fill_manual_for_btc: state.btcFillManual,
         }),
