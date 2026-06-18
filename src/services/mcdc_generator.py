@@ -1792,7 +1792,6 @@ def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | Non
     last_column = column_name(len(sheet_rows[0]))
     dimension = f"A1:{last_column}{len(sheet_rows)}"
     filter_dimension = f"A6:{last_column}{len(sheet_rows)}"
-    comment_column = column_name(len(sheet_rows[0]))
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="{dimension}"/>
@@ -1805,7 +1804,6 @@ def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | Non
   <sheetData>
 {row_xml}
   </sheetData>
-  <mergeCells count="1"><mergeCell ref="{comment_column}5:{comment_column}6"/></mergeCells>
   <autoFilter ref="{filter_dimension}"/>
 </worksheet>
 """
@@ -1821,8 +1819,8 @@ def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadat
         pad_row(["Scope", metadata.scope], max_columns),
         pad_row(["Name", metadata.name], max_columns),
     ]
-    group_row = pad_row([*rows[0], "Comment"], max_columns)
-    header_row = pad_row([*rows[1], ""], max_columns)
+    group_row = pad_row([*rows[0], ""], max_columns)
+    header_row = pad_row([*rows[1], "Comment"], max_columns)
     data_rows = [pad_row(row, max_columns) for row in rows[2:]]
     return [*padded_rows, group_row, header_row, *data_rows]
 
@@ -1845,7 +1843,7 @@ def excel_section_by_column(group_row: list[TableValue]) -> dict[int, str]:
     section_by_column: dict[int, str] = {}
     current_section = "Mode"
     for index, value in enumerate(group_row, start=1):
-        if value in {"Inputs", "Parameters", "Outputs", "Comment"}:
+        if value in {"Inputs", "Parameters", "Outputs"}:
             current_section = str(value)
         section_by_column[index] = current_section
     return section_by_column
