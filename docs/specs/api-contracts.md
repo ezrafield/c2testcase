@@ -187,7 +187,7 @@ Workbook layout:
 - worksheet name is `name`.
 - filename is `<name>.xlsx`.
 - rows 1-4 contain `Format Version`, `Architecture`, `Scope`, and `Name`; cell `B1` is always numeric.
-- row 5 groups `Inputs`, `Parameters`, `Outputs`, and a merged `Comment` column.
-- row 6 contains vertical testcase column headers, including expanded array columns from all three groups. The merged `Comment` column does not repeat `Comment` in row 6.
+- row 5 groups `Inputs`, `Parameters`, and `Outputs`; the trailing comment column is blank on this row.
+- row 6 contains vertical testcase column headers, including expanded array columns from all three groups, plus `Comment` in the final column. The comment column is not merged.
 - testcase data starts at row 7.
 - when LibreOffice is available locally, the generated `.xlsx` is normalized through headless LibreOffice before download to improve SharePoint / Excel Online compatibility.
