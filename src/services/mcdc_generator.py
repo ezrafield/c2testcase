@@ -1816,7 +1816,7 @@ def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadat
         return []
     max_columns = len(rows[1]) + 1 if len(rows) > 1 else len(rows[0]) + 1
     padded_rows = [
-        pad_row(["Format Version", metadata.format_version], max_columns),
+        pad_row(["Format Version", excel_format_version_number(metadata.format_version)], max_columns),
         pad_row(["Architecture", metadata.architecture], max_columns),
         pad_row(["Scope", metadata.scope], max_columns),
         pad_row(["Name", metadata.name], max_columns),
@@ -1825,6 +1825,16 @@ def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadat
     header_row = pad_row([*rows[1], ""], max_columns)
     data_rows = [pad_row(row, max_columns) for row in rows[2:]]
     return [*padded_rows, group_row, header_row, *data_rows]
+
+
+def excel_format_version_number(format_version: str) -> float:
+    try:
+        value = float(str(format_version).strip())
+    except (TypeError, ValueError):
+        return 1.3
+    if not math.isfinite(value):
+        return 1.3
+    return value
 
 
 def pad_row(row: list[TableValue], width: int) -> list[TableValue]:
