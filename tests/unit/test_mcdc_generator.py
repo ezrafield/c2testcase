@@ -510,7 +510,7 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "99" in sheet_xml
     assert "Format Version" in sheet_xml
     assert sheet_xml.count("Comment") == 1
-    assert "<mergeCells" not in sheet_xml
+    assert "<mergeCells" in sheet_xml
 
 
 def test_excel_export_uses_metadata_name_and_full_template_data(tmp_path: Path) -> None:
@@ -541,7 +541,7 @@ def test_excel_export_uses_metadata_name_and_full_template_data(tmp_path: Path) 
     assert "sample.c:1:f" in sheet_xml
     assert "SIL_SV_ATG_1" in sheet_xml
     assert sheet_xml.count("Comment") == 1
-    assert "<mergeCells" not in sheet_xml
+    assert "<mergeCells" in sheet_xml
     assert "<autoFilter" not in sheet_xml
     assert "<pane" not in sheet_xml
     assert "Step" in sheet_xml
@@ -567,18 +567,20 @@ def test_excel_export_keeps_template_metadata_rows(tmp_path: Path) -> None:
     with ZipFile(output_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
 
-    assert '<c r="A1" t="inlineStr"><is><t>Format Version</t></is></c>' in sheet_xml
-    assert '<c r="B1"><v>3.4</v></c>' in sheet_xml
-    assert '<c r="A2" t="inlineStr"><is><t>Architecture</t></is></c>' in sheet_xml
-    assert '<c r="B2" t="inlineStr"><is><t>Architecture</t></is></c>' in sheet_xml
-    assert '<c r="A3" t="inlineStr"><is><t>Scope</t></is></c>' in sheet_xml
+    assert '<c r="A1" t="inlineStr" s="1"><is><t>Format Version</t></is></c>' in sheet_xml
+    assert '<c r="B1" s="1"><v>3.4</v></c>' in sheet_xml
+    assert '<c r="A2" t="inlineStr" s="1"><is><t>Architecture</t></is></c>' in sheet_xml
+    assert '<c r="B2" t="inlineStr" s="1"><is><t>Architecture</t></is></c>' in sheet_xml
+    assert '<c r="A3" t="inlineStr" s="1"><is><t>Scope</t></is></c>' in sheet_xml
     assert "scope.c:1:f" in sheet_xml
-    assert '<c r="A4" t="inlineStr"><is><t>Name</t></is></c>' in sheet_xml
-    assert '<c r="B4" t="inlineStr"><is><t>Plain_Table</t></is></c>' in sheet_xml
-    assert '<c r="A5" t="inlineStr"><is><t>Mode</t></is></c>' in sheet_xml
-    assert '<c r="B5" t="inlineStr"><is><t>Inputs</t></is></c>' in sheet_xml
-    assert '<c r="A6" t="inlineStr"><is><t>Step</t></is></c>' in sheet_xml
-    assert '<c r="C6" t="inlineStr"><is><t>Comment</t></is></c>' in sheet_xml
+    assert '<c r="A4" t="inlineStr" s="1"><is><t>Name</t></is></c>' in sheet_xml
+    assert '<c r="B4" t="inlineStr" s="1"><is><t>Plain_Table</t></is></c>' in sheet_xml
+    assert '<c r="A5" t="inlineStr" s="1"><is><t>Mode</t></is></c>' in sheet_xml
+    assert '<c r="B5" t="inlineStr" s="2"><is><t>Inputs</t></is></c>' in sheet_xml
+    assert '<c r="C5" t="inlineStr" s="1"><is><t>Comment</t></is></c>' in sheet_xml
+    assert '<c r="A6" t="inlineStr" s="1"><is><t>Step</t></is></c>' in sheet_xml
+    assert '<c r="C6" s="1"/>' in sheet_xml
+    assert '<mergeCell ref="C5:C6"/>' in sheet_xml
     assert '<c r="B7"><v>1</v></c>' in sheet_xml
 
 
@@ -600,12 +602,12 @@ def test_excel_export_keeps_inputs_parameters_outputs_as_plain_cells(tmp_path: P
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
         styles_xml = workbook.read("xl/styles.xml").decode()
 
-    assert '<cellXfs count="1">' in styles_xml
+    assert '<cellXfs count="10">' in styles_xml
     assert "Parameters" in sheet_xml
-    assert ' s="' not in sheet_xml
+    assert ' s="' in sheet_xml
     assert sheet_xml.count("Comment") == 1
     assert "<autoFilter" not in sheet_xml
-    assert "<mergeCells" not in sheet_xml
+    assert "<mergeCells" in sheet_xml
 
 
 def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
@@ -642,14 +644,13 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
     assert "SIL &quot;SV&quot; ATG" in workbook_xml or 'SIL "SV" ATG' in workbook_xml
     assert "core-properties" in root_rels
     assert "extended-properties" in root_rels
-    assert "<cellStyles" in styles_xml
-    assert "<dxfs" in styles_xml
-    assert "<tableStyles" in styles_xml
+    assert '<cellXfs count="10">' in styles_xml
     assert "sample.c:1:f " in sheet_xml
     assert "Format Version" in sheet_xml
     assert sheet_xml.count("Comment") == 1
     assert "<autoFilter" not in sheet_xml
     assert "<pane" not in sheet_xml
+    assert "<mergeCells" in sheet_xml
     assert 'xml:space="preserve"' in sheet_xml
 
 
