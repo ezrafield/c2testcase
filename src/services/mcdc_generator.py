@@ -445,6 +445,8 @@ def write_testcase_workbook_rows(
     normalize_with_libreoffice: bool = True,
 ) -> None:
     metadata = metadata or ExcelExportMetadata()
+    sheet_rows = excel_export_rows(rows, metadata)
+    shared_strings = excel_shared_strings(sheet_rows)
     with ZipFile(output_path, "w", ZIP_DEFLATED) as workbook:
         workbook.writestr("[Content_Types].xml", xlsx_content_types())
         workbook.writestr("_rels/.rels", xlsx_root_rels())
@@ -452,8 +454,9 @@ def write_testcase_workbook_rows(
         workbook.writestr("docProps/app.xml", xlsx_app_properties(metadata.name))
         workbook.writestr("xl/workbook.xml", xlsx_workbook(metadata.name))
         workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
+        workbook.writestr("xl/sharedStrings.xml", xlsx_shared_strings(shared_strings))
         workbook.writestr("xl/styles.xml", xlsx_styles())
-        workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(rows, metadata))
+        workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(sheet_rows, shared_strings))
     if normalize_with_libreoffice:
         normalize_xlsx_with_libreoffice(output_path)
 
@@ -1667,6 +1670,7 @@ def xlsx_content_types() -> str:
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>
@@ -1745,6 +1749,7 @@ def xlsx_workbook_rels() -> str:
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
 </Relationships>
 """
 
@@ -1773,12 +1778,13 @@ def xlsx_styles() -> str:
 """
 
 
-def xlsx_sheet(rows: list[list[TableValue]], metadata: ExcelExportMetadata | None = None) -> str:
-    metadata = metadata or ExcelExportMetadata()
-    sheet_rows = excel_export_rows(rows, metadata)
+def xlsx_sheet(
+    sheet_rows: list[list[TableValue]],
+    shared_strings: dict[str, int],
+) -> str:
     sections = excel_section_by_column(sheet_rows[4])
     row_xml = "\n".join(
-        xlsx_row(index, row, section_by_column=sections)
+        xlsx_row(index, row, section_by_column=sections, shared_strings=shared_strings)
         for index, row in enumerate(sheet_rows, start=1)
     )
     last_column = column_name(max(len(row) for row in sheet_rows))
@@ -1826,6 +1832,43 @@ def collapse_excel_group_headers(row: list[TableValue]) -> list[TableValue]:
     return collapsed
 
 
+def excel_shared_strings(rows: list[list[TableValue]]) -> dict[str, int]:
+    ordered: list[str] = []
+
+    def add(value: TableValue) -> None:
+        if not isinstance(value, str) or value == "":
+            return
+        normalized = xml_valid_text(value)
+        if normalized not in ordered:
+            ordered.append(normalized)
+
+    for row in rows[:4]:
+        for value in row:
+            add(value)
+    if len(rows) >= 6:
+        for value in rows[4][:-1]:
+            add(value)
+        for value in rows[5][:-1]:
+            add(value)
+        add(rows[4][-1])
+    for row in rows[6:]:
+        for value in row:
+            add(value)
+    return {value: index for index, value in enumerate(ordered)}
+
+
+def xlsx_shared_strings(shared_strings: dict[str, int]) -> str:
+    ordered = sorted(shared_strings.items(), key=lambda item: item[1])
+    items = "".join(
+        f"<si><t>{escape(value)}</t></si>"
+        for value, _ in ordered
+    )
+    count = len(ordered)
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{count}" uniqueCount="{count}">{items}</sst>
+"""
+
+
 def excel_format_version_number(format_version: str) -> float:
     try:
         value = float(str(format_version).strip())
@@ -1854,14 +1897,17 @@ def xlsx_row(
     row_index: int,
     row: list[TableValue],
     section_by_column: dict[int, str] | None = None,
+    shared_strings: dict[str, int] | None = None,
 ) -> str:
     section_by_column = section_by_column or {}
+    shared_strings = shared_strings or {}
     cells = "".join(
         xlsx_cell(
             row_index,
             column_index,
             value,
             style=xlsx_style_for_cell(row_index, column_index, len(row), section_by_column),
+            shared_strings=shared_strings,
         )
         for column_index, value in enumerate(row, start=1)
     )
@@ -1902,7 +1948,13 @@ def xlsx_style_for_cell(
     return 0
 
 
-def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int = 0) -> str:
+def xlsx_cell(
+    row_index: int,
+    column_index: int,
+    value: TableValue,
+    style: int = 0,
+    shared_strings: dict[str, int] | None = None,
+) -> str:
     reference = f"{column_name(column_index)}{row_index}"
     style_attr = f' s="{style}"' if style else ""
     if value == "":
@@ -1911,13 +1963,25 @@ def xlsx_cell(row_index: int, column_index: int, value: TableValue, style: int =
         return f'<c r="{reference}" t="b"{style_attr}><v>{int(value)}</v></c>'
     if isinstance(value, int | float):
         if isinstance(value, float) and not math.isfinite(value):
-            text = xml_text(str(value))
-            return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t>{text}</t></is></c>'
-        return f'<c r="{reference}"{style_attr}><v>{value}</v></c>'
+            return xlsx_shared_string_cell(reference, str(value), style, shared_strings or {})
+        type_attr = ' t="n"' if style else ""
+        return f'<c r="{reference}"{style_attr}{type_attr}><v>{value}</v></c>'
+    return xlsx_shared_string_cell(reference, str(value), style, shared_strings or {})
+
+
+def xlsx_shared_string_cell(
+    reference: str,
+    value: str,
+    style: int,
+    shared_strings: dict[str, int],
+) -> str:
+    style_attr = f' s="{style}"' if style else ""
     raw_text = xml_valid_text(str(value))
+    if raw_text in shared_strings:
+        return f'<c r="{reference}"{style_attr} t="s"><v>{shared_strings[raw_text]}</v></c>'
     text = escape(raw_text)
     space_attr = ' xml:space="preserve"' if raw_text != raw_text.strip() else ""
-    return f'<c r="{reference}" t="inlineStr"{style_attr}><is><t{space_attr}>{text}</t></is></c>'
+    return f'<c r="{reference}"{style_attr} t="inlineStr"><is><t{space_attr}>{text}</t></is></c>'
 
 
 def xml_text(value: str) -> str:
