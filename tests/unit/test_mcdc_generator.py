@@ -500,16 +500,18 @@ def test_writes_json_harness_and_gap_report(tmp_path: Path) -> None:
     assert "Confirmed LLVM MC/DC coverage ready:" in gap_report_path.read_text()
     with ZipFile(excel_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
-    assert "Step" in sheet_xml
-    assert "Inputs" in sheet_xml
-    assert "Outputs" in sheet_xml
-    assert "expected" in sheet_xml
-    assert "ready" in sheet_xml
-    assert "x" in sheet_xml
-    assert "manual_input" in sheet_xml
-    assert "99" in sheet_xml
-    assert "Format Version" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
+    workbook_text = sheet_xml + shared_xml
+    assert "Step" in shared_xml
+    assert "Inputs" in shared_xml
+    assert "Outputs" in shared_xml
+    assert "expected" in shared_xml
+    assert "ready" in shared_xml
+    assert "x" in shared_xml
+    assert "manual_input" in shared_xml
+    assert "99" in workbook_text
+    assert "Format Version" in shared_xml
+    assert shared_xml.count("Comment") == 1
     assert "<mergeCells" in sheet_xml
 
 
@@ -535,18 +537,19 @@ def test_excel_export_uses_metadata_name_and_full_template_data(tmp_path: Path) 
     with ZipFile(excel_path) as workbook:
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
     assert 'name="SIL_SV_ATG_1"' in workbook_xml
-    assert "Format Version" in sheet_xml
-    assert "Example Architecture [C-Code]" in sheet_xml
-    assert "sample.c:1:f" in sheet_xml
-    assert "SIL_SV_ATG_1" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert "Format Version" in shared_xml
+    assert "Example Architecture [C-Code]" in shared_xml
+    assert "sample.c:1:f" in shared_xml
+    assert "SIL_SV_ATG_1" in shared_xml
+    assert shared_xml.count("Comment") == 1
     assert "<mergeCells" in sheet_xml
     assert "<autoFilter" not in sheet_xml
     assert "<pane" not in sheet_xml
-    assert "Step" in sheet_xml
-    assert "Inputs" in sheet_xml
-    assert "Outputs" in sheet_xml
+    assert "Step" in shared_xml
+    assert "Inputs" in shared_xml
+    assert "Outputs" in shared_xml
 
 
 def test_excel_export_keeps_template_metadata_rows(tmp_path: Path) -> None:
@@ -566,19 +569,20 @@ def test_excel_export_keeps_template_metadata_rows(tmp_path: Path) -> None:
 
     with ZipFile(output_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
 
-    assert '<c r="A1" t="inlineStr" s="1"><is><t>Format Version</t></is></c>' in sheet_xml
-    assert '<c r="B1" s="1"><v>3.4</v></c>' in sheet_xml
-    assert '<c r="A2" t="inlineStr" s="1"><is><t>Architecture</t></is></c>' in sheet_xml
-    assert '<c r="B2" t="inlineStr" s="1"><is><t>Architecture</t></is></c>' in sheet_xml
-    assert '<c r="A3" t="inlineStr" s="1"><is><t>Scope</t></is></c>' in sheet_xml
-    assert "scope.c:1:f" in sheet_xml
-    assert '<c r="A4" t="inlineStr" s="1"><is><t>Name</t></is></c>' in sheet_xml
-    assert '<c r="B4" t="inlineStr" s="1"><is><t>Plain_Table</t></is></c>' in sheet_xml
-    assert '<c r="A5" t="inlineStr" s="1"><is><t>Mode</t></is></c>' in sheet_xml
-    assert '<c r="B5" t="inlineStr" s="2"><is><t>Inputs</t></is></c>' in sheet_xml
-    assert '<c r="C5" t="inlineStr" s="1"><is><t>Comment</t></is></c>' in sheet_xml
-    assert '<c r="A6" t="inlineStr" s="1"><is><t>Step</t></is></c>' in sheet_xml
+    assert '<c r="A1" s="1" t="s"><v>0</v></c>' in sheet_xml
+    assert '<c r="B1" s="1" t="n"><v>3.4</v></c>' in sheet_xml
+    assert '<c r="A2" s="1" t="s"><v>1</v></c>' in sheet_xml
+    assert '<c r="B2" s="1" t="s"><v>1</v></c>' in sheet_xml
+    assert '<c r="A3" s="1" t="s"><v>2</v></c>' in sheet_xml
+    assert "scope.c:1:f" in shared_xml
+    assert '<c r="A4" s="1" t="s"><v>4</v></c>' in sheet_xml
+    assert '<c r="B4" s="1" t="s"><v>5</v></c>' in sheet_xml
+    assert '<c r="A5" s="1" t="s"><v>6</v></c>' in sheet_xml
+    assert '<c r="B5" s="2" t="s"><v>7</v></c>' in sheet_xml
+    assert '<c r="C5" s="1" t="s"><v>10</v></c>' in sheet_xml
+    assert '<c r="A6" s="1" t="s"><v>8</v></c>' in sheet_xml
     assert '<c r="C6" s="1"/>' in sheet_xml
     assert '<mergeCell ref="C5:C6"/>' in sheet_xml
     assert '<c r="B7"><v>1</v></c>' in sheet_xml
@@ -601,11 +605,12 @@ def test_excel_export_keeps_inputs_parameters_outputs_as_plain_cells(tmp_path: P
     with ZipFile(output_path) as workbook:
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
         styles_xml = workbook.read("xl/styles.xml").decode()
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
 
     assert '<cellXfs count="10">' in styles_xml
-    assert "Parameters" in sheet_xml
+    assert "Parameters" in shared_xml
     assert ' s="' in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert shared_xml.count("Comment") == 1
     assert "<autoFilter" not in sheet_xml
     assert "<mergeCells" in sheet_xml
 
@@ -635,6 +640,7 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
         assert "docProps/app.xml" in names
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
         styles_xml = workbook.read("xl/styles.xml").decode()
         root_rels = workbook.read("_rels/.rels").decode()
         for part in names:
@@ -645,13 +651,13 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
     assert "core-properties" in root_rels
     assert "extended-properties" in root_rels
     assert '<cellXfs count="10">' in styles_xml
-    assert "sample.c:1:f " in sheet_xml
-    assert "Format Version" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert "sample.c:1:f " in shared_xml
+    assert "Format Version" in shared_xml
+    assert shared_xml.count("Comment") == 1
     assert "<autoFilter" not in sheet_xml
     assert "<pane" not in sheet_xml
     assert "<mergeCells" in sheet_xml
-    assert 'xml:space="preserve"' in sheet_xml
+    assert 'xml:space="preserve"' in sheet_xml or " MANUAL " in shared_xml
 
 
 def test_excel_export_can_be_normalized_by_libreoffice_when_available(

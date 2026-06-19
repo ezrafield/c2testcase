@@ -165,15 +165,16 @@ def test_web_app_exports_excel_with_user_metadata() -> None:
     with ZipFile(BytesIO(base64.b64decode(export_payload["download"]))) as workbook:
         workbook_xml = workbook.read("xl/workbook.xml").decode()
         sheet_xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+        shared_xml = workbook.read("xl/sharedStrings.xml").decode()
     assert 'name="SIL_SV_ATG_2"' in workbook_xml
-    assert "Format Version" in sheet_xml
-    assert "Example Architecture [C-Code]" in sheet_xml
-    assert "logic.c:1:logic" in sheet_xml
-    assert "SIL_SV_ATG_2" in sheet_xml
-    assert "Step" in sheet_xml
-    assert "Inputs" in sheet_xml
-    assert "Outputs" in sheet_xml
-    assert sheet_xml.count("Comment") == 1
+    assert "Format Version" in shared_xml
+    assert "Example Architecture [C-Code]" in shared_xml
+    assert "logic.c:1:logic" in shared_xml
+    assert "SIL_SV_ATG_2" in shared_xml
+    assert "Step" in shared_xml
+    assert "Inputs" in shared_xml
+    assert "Outputs" in shared_xml
+    assert shared_xml.count("Comment") == 1
 
 
 def test_web_app_exports_excel_with_btc_manual_fill() -> None:
