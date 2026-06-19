@@ -581,11 +581,11 @@ def test_excel_export_keeps_template_metadata_rows(tmp_path: Path) -> None:
     assert '<c r="B4" s="1" t="s"><v>5</v></c>' in sheet_xml
     assert '<c r="A5" s="1" t="s"><v>6</v></c>' in sheet_xml
     assert '<c r="B5" s="2" t="s"><v>7</v></c>' in sheet_xml
-    assert '<c r="C5" s="1" t="s"><v>10</v></c>' in sheet_xml
-    assert '<c r="A6" s="1" t="s"><v>8</v></c>' in sheet_xml
-    assert '<c r="C6" s="1"/>' in sheet_xml
+    assert '<c r="C5" s="4" t="s"><v>8</v></c>' in sheet_xml
+    assert '<c r="A6" s="1" t="s"><v>9</v></c>' in sheet_xml
+    assert '<c r="C6" s="4"/>' in sheet_xml
     assert '<mergeCell ref="C5:C6"/>' in sheet_xml
-    assert '<c r="B7"><v>1</v></c>' in sheet_xml
+    assert '<c r="B7" s="7" t="n"><v>1</v></c>' in sheet_xml
 
 
 def test_excel_export_keeps_inputs_parameters_outputs_as_plain_cells(tmp_path: Path) -> None:
@@ -607,7 +607,7 @@ def test_excel_export_keeps_inputs_parameters_outputs_as_plain_cells(tmp_path: P
         styles_xml = workbook.read("xl/styles.xml").decode()
         shared_xml = workbook.read("xl/sharedStrings.xml").decode()
 
-    assert '<cellXfs count="10">' in styles_xml
+    assert '<cellXfs count="8">' in styles_xml
     assert "Parameters" in shared_xml
     assert ' s="' in sheet_xml
     assert shared_xml.count("Comment") == 1
@@ -650,7 +650,7 @@ def test_excel_export_is_sharepoint_friendly_ooxml(tmp_path: Path) -> None:
     assert "SIL &quot;SV&quot; ATG" in workbook_xml or 'SIL "SV" ATG' in workbook_xml
     assert "core-properties" in root_rels
     assert "extended-properties" in root_rels
-    assert '<cellXfs count="10">' in styles_xml
+    assert '<cellXfs count="8">' in styles_xml
     assert "sample.c:1:f " in shared_xml
     assert "Format Version" in shared_xml
     assert shared_xml.count("Comment") == 1
@@ -682,6 +682,7 @@ def test_excel_export_can_be_normalized_by_libreoffice_when_available(
         [["Mode", "Inputs"], ["Step", "a"], [0, 1]],
         output_path,
         ExcelExportMetadata(name="LibreOffice_Format"),
+        normalize_with_libreoffice=True,
     )
 
     assert calls
