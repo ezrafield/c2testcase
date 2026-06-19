@@ -442,7 +442,7 @@ def write_testcase_workbook_rows(
     rows: list[list[TableValue]],
     output_path: Path,
     metadata: ExcelExportMetadata | None = None,
-    normalize_with_libreoffice: bool = True,
+    normalize_with_libreoffice: bool = False,
 ) -> None:
     metadata = metadata or ExcelExportMetadata()
     sheet_rows = excel_export_rows(rows, metadata)
@@ -454,6 +454,7 @@ def write_testcase_workbook_rows(
         workbook.writestr("docProps/app.xml", xlsx_app_properties(metadata.name))
         workbook.writestr("xl/workbook.xml", xlsx_workbook(metadata.name))
         workbook.writestr("xl/_rels/workbook.xml.rels", xlsx_workbook_rels())
+        workbook.writestr("xl/theme/theme1.xml", xlsx_theme())
         workbook.writestr("xl/sharedStrings.xml", xlsx_shared_strings(shared_strings))
         workbook.writestr("xl/styles.xml", xlsx_styles())
         workbook.writestr("xl/worksheets/sheet1.xml", xlsx_sheet(sheet_rows, shared_strings))
@@ -1663,136 +1664,162 @@ def testcase_sort_key(row: MCDCRow, variable_names: list[str]) -> tuple[bool, tu
 
 
 def xlsx_content_types() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-</Types>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="fntdata" ContentType="application/x-fontdata"/>'
+        '<Default Extension="jpeg" ContentType="image/jpeg"/>'
+        '<Default Extension="png" ContentType="image/png"/>'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>\n'
+        '</Types>'
+    )
 
 
 def xlsx_root_rels() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
-</Relationships>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>\n'
+        '</Relationships>'
+    )
 
 
 def xlsx_core_properties(name: str) -> str:
-    title = xml_text(name or "mcdc_testcases")
-    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>{title}</dc:title>
-  <dc:creator>c2testcase</dc:creator>
-  <cp:lastModifiedBy>c2testcase</cp:lastModifiedBy>
-  <dcterms:created xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:created>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:modified>
-</cp:coreProperties>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<dcterms:created xsi:type="dcterms:W3CDTF">2026-06-05T09:07:50Z</dcterms:created>'
+        '<dc:creator>Apache POI</dc:creator><dc:description></dc:description><dc:language>en-US</dc:language>'
+        '<cp:lastModifiedBy></cp:lastModifiedBy>'
+        '<dcterms:modified xsi:type="dcterms:W3CDTF">2026-06-19T15:06:12Z</dcterms:modified>'
+        '<cp:revision>1</cp:revision><dc:subject></dc:subject><dc:title></dc:title></cp:coreProperties>'
+    )
 
 
 def xlsx_app_properties(sheet_name: str) -> str:
-    safe_name = xml_text(safe_sheet_name(sheet_name))
-    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>c2testcase</Application>
-  <DocSecurity>0</DocSecurity>
-  <ScaleCrop>false</ScaleCrop>
-  <HeadingPairs>
-    <vt:vector size="2" baseType="variant">
-      <vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant>
-      <vt:variant><vt:i4>1</vt:i4></vt:variant>
-    </vt:vector>
-  </HeadingPairs>
-  <TitlesOfParts>
-    <vt:vector size="1" baseType="lpstr">
-      <vt:lpstr>{safe_name}</vt:lpstr>
-    </vt:vector>
-  </TitlesOfParts>
-  <Company></Company>
-  <LinksUpToDate>false</LinksUpToDate>
-  <SharedDoc>false</SharedDoc>
-  <HyperlinksChanged>false</HyperlinksChanged>
-  <AppVersion>16.0300</AppVersion>
-</Properties>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        '<Template></Template><TotalTime>0</TotalTime>'
+        '<Application>LibreOffice/26.2.2.2$Windows_X86_64 LibreOffice_project/1f77d10d6938fd34972958f64b2bcfa54f8b1ba5</Application>'
+        '<AppVersion>15.0000</AppVersion></Properties>'
+    )
 
 
 def xlsx_workbook(sheet_name: str = "Testcases") -> str:
     safe_name = quoteattr(xml_valid_text(safe_sheet_name(sheet_name)))
-    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="23426"/>
-  <workbookPr defaultThemeVersion="166925"/>
-  <bookViews>
-    <workbookView xWindow="0" yWindow="0" windowWidth="24000" windowHeight="15000"/>
-  </bookViews>
-  <sheets>
-    <sheet name={safe_name} sheetId="1" r:id="rId1"/>
-  </sheets>
-  <calcPr calcId="191029"/>
-</workbook>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        'xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" '
+        'xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" '
+        'xmlns:xr6="http://schemas.microsoft.com/office/spreadsheetml/2016/revision6" '
+        'xmlns:xr10="http://schemas.microsoft.com/office/spreadsheetml/2016/revision10" '
+        'xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2">'
+        '<fileVersion appName="Calc" lowestEdited="4"/>'
+        '<workbookPr backupFile="false" showObjects="all" date1904="false"/>'
+        '<workbookProtection/>'
+        '<bookViews><workbookView showHorizontalScroll="true" showVerticalScroll="true" showSheetTabs="true" '
+        'xWindow="0" yWindow="0" windowWidth="16384" windowHeight="8192" tabRatio="500" firstSheet="0" activeTab="0"/></bookViews>'
+        f'<sheets><sheet name={safe_name} sheetId="1" state="visible" r:id="rId3"/></sheets>'
+        '<calcPr iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.001"/>'
+        '<extLst><ext xmlns:loext="http://schemas.libreoffice.org/" uri="{7626C862-2A13-11E5-B345-FEFF819CDC9F}">'
+        '<loext:extCalcPr stringRefSyntax="CalcA1ExcelA1"/></ext></extLst></workbook>'
+    )
 
 
 def xlsx_workbook_rels() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
-</Relationships>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>\n'
+        '</Relationships>'
+    )
 
 
 def xlsx_styles() -> str:
     return (
-        '<?xml version="1.0" encoding="UTF-8"?>\r\n'
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<numFmts count="0"/>'
-        '<fonts count="2"><font><sz val="11.0"/><color indexed="8"/><name val="Calibri"/>'
-        '<family val="2"/><scheme val="minor"/></font><font><name val="Calibri"/><sz val="11.0"/></font></fonts>'
-        '<fills count="12"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="darkGray"/></fill>'
-        '<fill><patternFill patternType="none"><fgColor indexed="44"/></patternFill></fill>'
-        '<fill><patternFill patternType="solid"><fgColor indexed="44"/></patternFill></fill>'
-        '<fill><patternFill patternType="none"><fgColor indexed="9"/></patternFill></fill>'
-        '<fill><patternFill patternType="solid"><fgColor indexed="9"/></patternFill></fill>'
-        '<fill><patternFill patternType="none"><fgColor indexed="22"/></patternFill></fill>'
-        '<fill><patternFill patternType="solid"><fgColor indexed="22"/></patternFill></fill>'
-        '<fill><patternFill patternType="none"><fgColor indexed="55"/></patternFill></fill>'
-        '<fill><patternFill patternType="solid"><fgColor indexed="55"/></patternFill></fill>'
-        '<fill><patternFill patternType="none"><fgColor indexed="23"/></patternFill></fill>'
-        '<fill><patternFill patternType="solid"><fgColor indexed="23"/></patternFill></fill></fills>'
-        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        '<cellXfs count="10"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-        '<xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="0"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="0"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="0"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="0"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="0"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="90"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="90"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="90"/></xf>'
-        '<xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true">'
-        '<alignment textRotation="90"/></xf></cellXfs></styleSheet>'
+        '<numFmts count="1"><numFmt numFmtId="164" formatCode="General"/></numFmts>'
+        '<fonts count="5"><font><sz val="10"/><name val="Arial"/><family val="2"/></font>'
+        '<font><sz val="10"/><name val="Arial"/><family val="0"/></font>'
+        '<font><sz val="10"/><name val="Arial"/><family val="0"/></font>'
+        '<font><sz val="10"/><name val="Arial"/><family val="0"/></font>'
+        '<font><sz val="11"/><name val="Calibri"/><family val="0"/><charset val="1"/></font></fonts>'
+        '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF99CCFF"/><bgColor rgb="FFCCCCFF"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor rgb="FFFFFFCC"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF808080"/><bgColor rgb="FF969696"/></patternFill></fill></fills>'
+        '<borders count="1"><border diagonalUp="false" diagonalDown="false"><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="20"><xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyFont="true" applyBorder="true" applyAlignment="true" applyProtection="true"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        + ''.join('<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>' for _ in range(10))
+        + '<xf numFmtId="43" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="41" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="44" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="42" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf>'
+        '<xf numFmtId="9" fontId="1" fillId="0" borderId="0" applyFont="true" applyBorder="false" applyAlignment="false" applyProtection="false"></xf></cellStyleXfs>'
+        '<cellXfs count="8"><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyFont="false" applyBorder="false" applyAlignment="false" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="2" borderId="0" xfId="0" applyFont="true" applyBorder="false" applyAlignment="true" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="3" borderId="0" xfId="0" applyFont="true" applyBorder="false" applyAlignment="true" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="4" borderId="0" xfId="0" applyFont="true" applyBorder="false" applyAlignment="true" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="2" borderId="0" xfId="0" applyFont="true" applyBorder="true" applyAlignment="true" applyProtection="false"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="3" borderId="0" xfId="0" applyFont="true" applyBorder="false" applyAlignment="true" applyProtection="false"><alignment horizontal="right" vertical="bottom" textRotation="90" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="4" fillId="4" borderId="0" xfId="0" applyFont="true" applyBorder="false" applyAlignment="true" applyProtection="false"><alignment horizontal="right" vertical="bottom" textRotation="90" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf>'
+        '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyFont="false" applyBorder="false" applyAlignment="true" applyProtection="true"><alignment horizontal="general" vertical="bottom" textRotation="0" wrapText="false" indent="0" shrinkToFit="false"/><protection locked="true" hidden="false"/></xf></cellXfs>'
+        '<cellStyles count="6"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Comma" xfId="15" builtinId="3"/><cellStyle name="Comma [0]" xfId="16" builtinId="6"/><cellStyle name="Currency" xfId="17" builtinId="4"/><cellStyle name="Currency [0]" xfId="18" builtinId="7"/><cellStyle name="Percent" xfId="19" builtinId="5"/></cellStyles></styleSheet>'
+    )
+
+
+def xlsx_theme() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Office">'
+        '<a:themeElements><a:clrScheme name="LibreOffice"><a:dk1><a:srgbClr val="000000"/></a:dk1>'
+        '<a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="000000"/></a:dk2>'
+        '<a:lt2><a:srgbClr val="FFFFFF"/></a:lt2><a:accent1><a:srgbClr val="18A303"/></a:accent1>'
+        '<a:accent2><a:srgbClr val="0369A3"/></a:accent2><a:accent3><a:srgbClr val="A33E03"/></a:accent3>'
+        '<a:accent4><a:srgbClr val="8E03A3"/></a:accent4><a:accent5><a:srgbClr val="C99C00"/></a:accent5>'
+        '<a:accent6><a:srgbClr val="C9211E"/></a:accent6><a:hlink><a:srgbClr val="0000EE"/></a:hlink>'
+        '<a:folHlink><a:srgbClr val="551A8B"/></a:folHlink></a:clrScheme>'
+        '<a:fontScheme name="Office"><a:majorFont><a:latin typeface="Arial" pitchFamily="0" charset="1"/>'
+        '<a:ea typeface="DejaVu Sans" pitchFamily="0" charset="1"/><a:cs typeface="DejaVu Sans" pitchFamily="0" charset="1"/></a:majorFont>'
+        '<a:minorFont><a:latin typeface="Arial" pitchFamily="0" charset="1"/>'
+        '<a:ea typeface="DejaVu Sans" pitchFamily="0" charset="1"/><a:cs typeface="DejaVu Sans" pitchFamily="0" charset="1"/></a:minorFont></a:fontScheme>'
+        '<a:fmtScheme><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill>'
+        '<a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill><a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill></a:fillStyleLst>'
+        '<a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:prstDash val="solid"/><a:miter/></a:ln>'
+        '<a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:prstDash val="solid"/><a:miter/></a:ln>'
+        '<a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:prstDash val="solid"/><a:miter/></a:ln></a:lnStyleLst>'
+        '<a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>'
+        '<a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill>'
+        '<a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill><a:solidFill><a:schemeClr val="phClr"></a:schemeClr></a:solidFill></a:bgFillStyleLst>'
+        '</a:fmtScheme></a:themeElements></a:theme>'
     )
 
 
@@ -1801,23 +1828,39 @@ def xlsx_sheet(
     shared_strings: dict[str, int],
 ) -> str:
     sections = excel_section_by_column(sheet_rows[4])
-    row_xml = "\n".join(
+    row_xml = "".join(
         xlsx_row(index, row, section_by_column=sections, shared_strings=shared_strings)
         for index, row in enumerate(sheet_rows, start=1)
     )
     last_column = column_name(max(len(row) for row in sheet_rows))
     comment_merge = f"{last_column}5:{last_column}6"
-    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1"/>
-  <sheetViews><sheetView workbookViewId="0" tabSelected="true"/></sheetViews>
-  <cols><col min="1" max="1" width="15.625" customWidth="true"/><col min="{len(sheet_rows[0])}" max="{len(sheet_rows[0])}" width="39.0625" customWidth="true"/></cols>
-  <sheetData>
-{row_xml}
-  </sheetData>
-  <mergeCells><mergeCell ref="{comment_merge}"/></mergeCells>
-</worksheet>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+        'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" '
+        'xmlns:xr2="http://schemas.microsoft.com/office/spreadsheetml/2015/revision2" '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        '<sheetPr filterMode="false"><pageSetUpPr fitToPage="false"/></sheetPr>'
+        f'<dimension ref="A1:{last_column}{len(sheet_rows)}"/>'
+        '<sheetViews><sheetView showFormulas="false" showGridLines="true" showRowColHeaders="true" '
+        'showZeros="true" rightToLeft="false" tabSelected="true" showOutlineSymbols="true" '
+        'defaultGridColor="true" view="normal" topLeftCell="A1" colorId="64" zoomScale="100" '
+        'zoomScaleNormal="100" zoomScalePageLayoutView="100" workbookViewId="0">'
+        '<selection pane="topLeft" activeCell="N16" activeCellId="0" sqref="N16"/></sheetView></sheetViews>'
+        '<sheetFormatPr defaultColWidth="8.6796875" defaultRowHeight="15" customHeight="false" '
+        'zeroHeight="false" outlineLevelRow="0" outlineLevelCol="0"></sheetFormatPr>'
+        f'<cols><col collapsed="false" customWidth="true" hidden="false" outlineLevel="0" max="1" min="1" style="0" width="15.62"/>'
+        f'<col collapsed="false" customWidth="true" hidden="false" outlineLevel="0" max="{len(sheet_rows[0])}" min="{len(sheet_rows[0])}" style="0" width="39.06"/></cols>'
+        f'<sheetData>{row_xml}</sheetData>'
+        f'<mergeCells count="1"><mergeCell ref="{comment_merge}"/></mergeCells>'
+        '<printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"/>'
+        '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.511811023622047" footer="0.511811023622047"/>'
+        '<pageSetup paperSize="1" scale="100" fitToWidth="1" fitToHeight="1" pageOrder="downThenOver" orientation="portrait" '
+        'blackAndWhite="false" draft="false" cellComments="none" horizontalDpi="300" verticalDpi="300" copies="1"/>'
+        '<headerFooter differentFirst="false" differentOddEven="false"><oddHeader></oddHeader><oddFooter></oddFooter></headerFooter></worksheet>'
+    )
 
 
 def excel_export_rows(rows: list[list[TableValue]], metadata: ExcelExportMetadata) -> list[list[TableValue]]:
@@ -1864,11 +1907,10 @@ def excel_shared_strings(rows: list[list[TableValue]]) -> dict[str, int]:
         for value in row:
             add(value)
     if len(rows) >= 6:
-        for value in rows[4][:-1]:
+        for value in rows[4]:
             add(value)
         for value in rows[5][:-1]:
             add(value)
-        add(rows[4][-1])
     for row in rows[6:]:
         for value in row:
             add(value)
@@ -1878,13 +1920,14 @@ def excel_shared_strings(rows: list[list[TableValue]]) -> dict[str, int]:
 def xlsx_shared_strings(shared_strings: dict[str, int]) -> str:
     ordered = sorted(shared_strings.items(), key=lambda item: item[1])
     items = "".join(
-        f"<si><t>{escape(value)}</t></si>"
+        f'<si><t xml:space="preserve">{escape(value)}</t></si>'
         for value, _ in ordered
     )
     count = len(ordered)
-    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{count}" uniqueCount="{count}">{items}</sst>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{count}" uniqueCount="{count}">{items}</sst>'
+    )
 
 
 def excel_format_version_number(format_version: str) -> float:
@@ -1919,6 +1962,9 @@ def xlsx_row(
 ) -> str:
     section_by_column = section_by_column or {}
     shared_strings = shared_strings or {}
+    if row_index >= 7:
+        while row and row[-1] == "":
+            row = row[:-1]
     cells = "".join(
         xlsx_cell(
             row_index,
@@ -1929,8 +1975,11 @@ def xlsx_row(
         )
         for column_index, value in enumerate(row, start=1)
     )
-    height_attr = ' ht="90.0" customHeight="true"' if row_index == 6 else ""
-    return f'    <row r="{row_index}"{height_attr}>{cells}</row>'
+    if row_index == 6:
+        attrs = ' customFormat="false" ht="90" hidden="false" customHeight="true" outlineLevel="0" collapsed="false"'
+    else:
+        attrs = ' customFormat="false" ht="15" hidden="false" customHeight="false" outlineLevel="0" collapsed="false"'
+    return f'<row r="{row_index}"{attrs}>{cells}</row>'
 
 
 def xlsx_style_for_cell(
@@ -1943,27 +1992,27 @@ def xlsx_style_for_cell(
         return 1
     if row_index == 5:
         if column_index == column_count:
-            return 1
+            return 4
         section = section_by_column.get(column_index)
         if section == "Inputs":
             return 2
         if section == "Parameters":
-            return 3
+            return 2
         if section == "Outputs":
-            return 5
+            return 3
         return 1
     if row_index == 6:
         if column_index == column_count:
-            return 1
+            return 4
         section = section_by_column.get(column_index)
         if section == "Inputs":
-            return 6
+            return 5
         if section == "Parameters":
-            return 7
+            return 5
         if section == "Outputs":
-            return 9
+            return 6
         return 1
-    return 0
+    return 7
 
 
 def xlsx_cell(
