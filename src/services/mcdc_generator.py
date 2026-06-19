@@ -1755,27 +1755,45 @@ def xlsx_workbook_rels() -> str:
 
 
 def xlsx_styles() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <numFmts count="0"/>
-  <fonts count="2"><font><sz val="11.0"/><color indexed="8"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><name val="Calibri"/><sz val="11.0"/></font></fonts>
-  <fills count="12"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="darkGray"/></fill><fill><patternFill patternType="none"><fgColor indexed="44"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="44"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="9"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="9"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="22"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="22"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="55"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="55"/></patternFill></fill><fill><patternFill patternType="none"><fgColor indexed="23"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor indexed="23"/></patternFill></fill></fills>
-  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
-  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="10">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="0"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true"><alignment textRotation="90"/></xf>
-  </cellXfs>
-</styleSheet>
-"""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\r\n'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<numFmts count="0"/>'
+        '<fonts count="2"><font><sz val="11.0"/><color indexed="8"/><name val="Calibri"/>'
+        '<family val="2"/><scheme val="minor"/></font><font><name val="Calibri"/><sz val="11.0"/></font></fonts>'
+        '<fills count="12"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="darkGray"/></fill>'
+        '<fill><patternFill patternType="none"><fgColor indexed="44"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor indexed="44"/></patternFill></fill>'
+        '<fill><patternFill patternType="none"><fgColor indexed="9"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor indexed="9"/></patternFill></fill>'
+        '<fill><patternFill patternType="none"><fgColor indexed="22"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor indexed="22"/></patternFill></fill>'
+        '<fill><patternFill patternType="none"><fgColor indexed="55"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor indexed="55"/></patternFill></fill>'
+        '<fill><patternFill patternType="none"><fgColor indexed="23"/></patternFill></fill>'
+        '<fill><patternFill patternType="solid"><fgColor indexed="23"/></patternFill></fill></fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="10"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="0"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="0"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="0"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="0"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="0"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="5" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="90"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="7" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="90"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="9" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="90"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="11" borderId="0" xfId="0" applyFont="true" applyFill="true">'
+        '<alignment textRotation="90"/></xf></cellXfs></styleSheet>'
+    )
 
 
 def xlsx_sheet(
