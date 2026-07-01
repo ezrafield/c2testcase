@@ -11,7 +11,10 @@ from src.services.mcdc_generator import (
     extract_function_parameters,
     find_tool_path,
     generate_mcdc_report,
+    parse_support_template,
+    read_xlsx_grid,
     summarize_coverage_readiness,
+    testcase_table as build_testcase_table,
     testcase_table_rows as build_testcase_table_rows,
     testcase_table_rows_from_dict as build_testcase_table_rows_from_dict,
     testcase_table_rows_to_csv as build_testcase_table_rows_csv,
@@ -733,3 +736,243 @@ def test_finds_llvm_tool_from_configured_bin_directory(tmp_path: Path, monkeypat
     monkeypatch.setenv("PATH", "")
 
     assert find_tool_path("clang") == str(tool)
+
+
+def _rows_for_decision(table: dict, decision_id: str) -> dict[bool, dict]:
+    """Return {decision_result: row} for the rows of a single decision."""
+    return {
+        bool(row["decision_result"]): row
+        for row in table["rows"]
+        if row["decision_id"] == decision_id
+    }
+
+
+def test_solver_expands_intermediate_and_to_root_inputs(tmp_path: Path) -> None:
+    # A decision that tests an intermediate variable must be traced back to the real
+    # external inputs that drive it, with the literal value needed to satisfy it.
+    source = tmp_path / "intermediate_and.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt8 mode;
+extern UInt8 enable;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt8 output_flag;
+
+void f(void)
+{
+   UInt8 tmp;
+   tmp = (mode == 20) && (enable != 0);
+   if (tmp != 0) {
+      output_flag = 1;
+   }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+
+    assert "mode" in table["input_columns"]
+    assert "enable" in table["input_columns"]
+    assert "tmp" not in table["input_columns"]
+
+    rows = _rows_for_decision(table, "D1")
+    # True case satisfies the AND: mode must equal 20 and enable must be truthy.
+    assert rows[True]["inputs"]["mode"] == 20
+    assert rows[True]["inputs"]["enable"] == 1
+    # False case breaks the AND via the first operand (mode != 20).
+    assert rows[False]["inputs"]["mode"] == 21
+
+
+def test_solver_expands_intermediate_or_of_equalities(tmp_path: Path) -> None:
+    source = tmp_path / "intermediate_or.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt8 a;
+extern UInt8 b;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt8 output_flag;
+
+void f(void)
+{
+   UInt8 tmp;
+   tmp = (a == 10) || (b == 10);
+   if (tmp != 0) {
+      output_flag = 1;
+   }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+
+    rows = _rows_for_decision(table, "D1")
+    # True case satisfies the OR by setting one operand to its matching value.
+    assert rows[True]["inputs"]["a"] == 10
+    # False case requires every operand to miss its target value.
+    assert rows[False]["inputs"]["a"] == 11
+    assert rows[False]["inputs"]["b"] == 11
+
+
+def test_solver_sets_feedback_state_variable_directly(tmp_path: Path) -> None:
+    # A state/feedback variable that is read in a decision and written later is set
+    # directly rather than expanded (its value depends on the previous cycle).
+    source = tmp_path / "feedback.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt8 trigger;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt8 state_flag;
+UInt8 output_flag;
+
+void f(void)
+{
+   if (state_flag != 0) {
+      output_flag = 1;
+   }
+   state_flag = trigger;
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+
+    assert "state_flag" in table["input_columns"]
+    rows = _rows_for_decision(table, "D1")
+    assert rows[True]["inputs"]["state_flag"] == 1
+    assert rows[False]["inputs"]["state_flag"] == 0
+
+
+def test_solver_keeps_shared_input_consistent_across_conditions(tmp_path: Path) -> None:
+    # Two derived conditions in one decision share VU08xmode; a single value (30) makes
+    # the first true and the second false. The solver must not clobber that value with the
+    # second condition's off-value (21), which would break the first.
+    source = tmp_path / "shared_input.c"
+    source.write_text(
+        """
+/*+++ $RAM_EXTERN$ +++*/
+extern UInt8 VU08xmode;
+extern UInt8 inhibit;
+
+/*+++ $RAM_PUBLIC$ +++*/
+UInt8 output_flag;
+
+void f(void)
+{
+   UInt8 hi;
+   UInt8 lo;
+   hi = (VU08xmode == 30) && (!(inhibit != 0));
+   lo = (VU08xmode == 20) && (!(inhibit != 0));
+   if ((hi != 0) || (lo != 0)) {
+      output_flag = 1;
+   }
+}
+""",
+        encoding="utf-8",
+    )
+
+    report = generate_mcdc_report(source, target_function="f", mcdc_mode="masking")
+    table = report.to_dict()["testcase_table"]
+    decision = next(d for d in report.to_dict()["decisions"] if d["id"] == "D1")
+    hi_index = decision["conditions"].index("hi != 0")
+    lo_index = decision["conditions"].index("lo != 0")
+
+    rows = [row for row in table["rows"] if row["decision_id"] == "D1"]
+    assert rows
+    for row in rows:
+        wants = row["mcdc_condition_values"]
+        mode = row["inputs"]["VU08xmode"]
+        # Whenever a condition is intended true, the shared input must carry the value
+        # that actually makes it true (and not be overwritten by the other condition).
+        if wants[hi_index]:
+            assert mode == 30
+        if wants[lo_index]:
+            assert mode == 20
+
+
+SAMPLE_TEMPLATE = Path("tests/evaluation/SIL_SV_ATG_1_sample.xlsx")
+SAMPLE_SOURCE = Path("tests/evaluation/ft-hfs_failinform-fh4-4.c")
+
+
+def test_parse_support_template_reads_columns_and_metadata() -> None:
+    override, metadata = parse_support_template(SAMPLE_TEMPLATE)
+
+    assert override.input_names[0] == "VS15tmpatfact_hf"
+    assert len(override.input_names) == 26
+    assert "VU08xshbhissta_hf" in override.input_names
+    assert override.parameter_names == ("CU15tpsenoffokhydoff", "CU15tpsenoffokhydon")
+    assert override.output_names[0] == "VTIMthydoffok_hf"
+    assert len(override.output_names) == 34
+    assert override.array_sizes == {}
+    assert metadata.name == "SIL_SV_ATG_1"
+    assert metadata.scope == "HFS_FAILINFORM_FH4.c:1:HFS_FAILINFORM_FH4"
+    assert metadata.format_version == "1.3"
+
+
+def test_parse_support_template_collapses_repeated_array_columns(tmp_path: Path) -> None:
+    template = tmp_path / "template.xlsx"
+    group_row = ["Mode", "Inputs", "Inputs", "Inputs", "Parameters", "Outputs"]
+    name_row = ["Step", "scalar_in", "arr", "arr", "gain", "result"]
+    write_testcase_workbook_rows(
+        [group_row, name_row],
+        template,
+        ExcelExportMetadata(name="CraftedTemplate", architecture="ARCH", scope="SCOPE"),
+    )
+
+    override, metadata = parse_support_template(template)
+
+    assert override.input_names == ("scalar_in", "arr")
+    assert override.array_sizes == {"arr": 2}
+    assert override.parameter_names == ("gain",)
+    assert override.output_names == ("result",)
+    assert metadata.name == "CraftedTemplate"
+    assert metadata.architecture == "ARCH"
+
+
+def test_read_xlsx_grid_round_trips_written_workbook(tmp_path: Path) -> None:
+    workbook = tmp_path / "grid.xlsx"
+    write_testcase_workbook_rows(
+        [["Mode", "Inputs"], ["Step", "x"], [0, 7]],
+        workbook,
+        ExcelExportMetadata(name="Grid"),
+    )
+
+    grid = read_xlsx_grid(workbook)
+
+    assert grid[0][0] == "Format Version"
+    assert any(row and row[0] == "Step" for row in grid)
+
+
+def test_interface_override_drives_generated_columns_and_values() -> None:
+    override, _ = parse_support_template(SAMPLE_TEMPLATE)
+
+    report = generate_mcdc_report(
+        SAMPLE_SOURCE,
+        target_function="J_hfs_failinform",
+        interface_override=override,
+    )
+    table = build_testcase_table(report)
+
+    # The template is authoritative: columns match its layout exactly.
+    assert list(table["input_columns"]) == list(override.input_names)
+    assert list(table["parameter_columns"]) == list(override.parameter_names)
+    assert list(table["output_columns"]) == list(override.output_names)
+    # No auto-detected array parameters leak in.
+    assert not any(
+        name.startswith(("XS15", "XU15", "S_TBL")) for name in table["parameter_columns"]
+    )
+    # The solver still drives real inputs, and parameters carry their C initial value.
+    d1 = _rows_for_decision(table, "D1")
+    assert d1[True]["inputs"]["VU08xshbhissta_hf"] == 10
+    assert d1[True]["parameters"]["CU15tpsenoffokhydoff"] == 1

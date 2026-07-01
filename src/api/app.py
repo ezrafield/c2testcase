@@ -13,6 +13,7 @@ from src.services.mcdc_generator import (
     MCDC_MODES,
     excel_export_rows,
     generate_mcdc_report,
+    parse_support_template,
     safe_excel_filename,
     testcase_table_rows_from_dict,
     testcase_table_rows_to_csv,
@@ -40,14 +41,15 @@ def index() -> str:
 async def generate_cases(
     source: UploadFile = File(...),
     headers: list[UploadFile] | None = File(default=None),
+    support_template: UploadFile | None = File(default=None),
     target_function: str = Form(default=""),
     input_variables: str = Form(default=""),
     output_variables: str = Form(default=""),
     compile_flags: str = Form(default=""),
-    excel_format_version: str = Form(default="1.3"),
+    excel_format_version: str = Form(default=""),
     excel_architecture: str = Form(default=""),
     excel_scope: str = Form(default=""),
-    excel_name: str = Form(default="mcdc_testcases"),
+    excel_name: str = Form(default=""),
     max_conditions: int = Form(default=12),
     mcdc_mode: str = Form(default="unique-cause"),
 ) -> dict[str, object]:
@@ -73,6 +75,18 @@ async def generate_cases(
             header_path.write_bytes(await header.read())
             header_paths.append(header_path)
 
+        interface_override = None
+        template_metadata: ExcelExportMetadata | None = None
+        if support_template is not None and support_template.filename:
+            if not support_template.filename.lower().endswith(".xlsx"):
+                raise HTTPException(status_code=400, detail="Support template must be a .xlsx file.")
+            template_path = workspace / safe_name(support_template.filename)
+            template_path.write_bytes(await support_template.read())
+            try:
+                interface_override, template_metadata = parse_support_template(template_path)
+            except (ValueError, KeyError) as error:
+                raise HTTPException(status_code=400, detail=f"Could not parse support template: {error}")
+
         output_dir = workspace / "out"
         parsed_input_variables, manual_inputs = parse_variable_setup(input_variables)
         parsed_output_variables, manual_outputs = parse_variable_setup(output_variables)
@@ -88,12 +102,16 @@ async def generate_cases(
             output_variables=parsed_output_variables,
             manual_outputs=manual_outputs,
             mcdc_mode=mcdc_mode,
+            interface_override=interface_override,
         )
+        # When a support template carries metadata, use it as the default for any blank
+        # Excel export field so the generated sheet preserves the template's identity.
+        template_metadata = template_metadata or ExcelExportMetadata()
         excel_metadata = ExcelExportMetadata(
-            format_version=excel_format_version.strip() or "1.3",
-            architecture=excel_architecture.strip(),
-            scope=excel_scope.strip(),
-            name=excel_name.strip() or "mcdc_testcases",
+            format_version=excel_format_version.strip() or template_metadata.format_version or "1.3",
+            architecture=excel_architecture.strip() or template_metadata.architecture,
+            scope=excel_scope.strip() or template_metadata.scope,
+            name=excel_name.strip() or template_metadata.name or "mcdc_testcases",
         )
         json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(
             report,
@@ -580,6 +598,8 @@ def render_index_html() -> str:
         <input id="source" name="source" type="file" accept=".c" required>
         <label for="headers">Headers</label>
         <input id="headers" name="headers" type="file" accept=".h" multiple>
+        <label for="support_template">Support template (Excel)</label>
+        <input id="support_template" name="support_template" type="file" accept=".xlsx">
         <label for="target_function">Target function</label>
         <input id="target_function" name="target_function" type="text" placeholder="logic">
         <label for="input_variables">Manual input setup</label>

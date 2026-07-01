@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
@@ -23,6 +24,8 @@ def test_web_app_exposes_table_and_excel_controls() -> None:
 
     assert response.status_code == 200
     assert "Testcase_table" in response.text
+    assert 'name="support_template"' in response.text
+    assert "Support template (Excel)" in response.text
     assert "Export Excel" in response.text
     assert "Export CSV" in response.text
     assert "Ccode_interface" in response.text
@@ -117,6 +120,57 @@ def test_web_app_generates_mcdc_artifacts() -> None:
     assert "generated_mcdc_tests.c" in payload["artifacts"]
     assert "gap_report.md" in payload["artifacts"]
     assert "mcdc_testcases.xlsx" in payload["downloads"]
+
+
+def test_web_app_generate_follows_support_template() -> None:
+    client = TestClient(app)
+
+    source_bytes = Path("tests/evaluation/ft-hfs_failinform-fh4-4.c").read_bytes()
+    template_bytes = Path("tests/evaluation/SIL_SV_ATG_1_sample.xlsx").read_bytes()
+
+    response = client.post(
+        "/api/generate",
+        data={"target_function": "J_hfs_failinform", "mcdc_mode": "masking"},
+        files={
+            "source": ("ft.c", source_bytes, "text/x-c"),
+            "support_template": (
+                "template.xlsx",
+                template_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    table = payload["report"]["testcase_table"]
+    # Columns follow the template exactly.
+    assert table["input_columns"][0] == "VS15tmpatfact_hf"
+    assert len(table["input_columns"]) == 26
+    assert table["parameter_columns"] == ["CU15tpsenoffokhydoff", "CU15tpsenoffokhydon"]
+    assert len(table["output_columns"]) == 34
+    assert not any(
+        name.startswith(("XS15", "XU15", "S_TBL")) for name in table["parameter_columns"]
+    )
+    # Template metadata supplies the default Excel name.
+    assert payload["excel_filename"] == "SIL_SV_ATG_1.xlsx"
+    assert "SIL_SV_ATG_1.xlsx" in payload["downloads"]
+
+
+def test_web_app_rejects_non_xlsx_support_template() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/generate",
+        data={"target_function": "logic"},
+        files={
+            "source": ("logic.c", b"int logic(int a){ if (a > 0) return 1; return 0; }", "text/x-c"),
+            "support_template": ("template.txt", b"not an excel file", "text/plain"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "xlsx" in response.json()["detail"].lower()
 
 
 def test_web_app_exports_excel_with_user_metadata() -> None:

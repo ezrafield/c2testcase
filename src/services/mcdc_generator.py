@@ -11,10 +11,11 @@ import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
+from xml.etree import ElementTree
 from xml.sax.saxutils import escape, quoteattr
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 BOOLEAN_OPERATORS = {"&&", "||"}
@@ -95,6 +96,7 @@ class InterfaceAnalysis:
     array_sizes: dict[str, int]
     initial_values: dict[str, Any]
     assignment_sources: dict[str, tuple[str, ...]]
+    assignment_expressions: dict[str, str]
     assignment_targets: tuple[str, ...]
     condition_input_roots: tuple[str, ...]
     condition_output_roots: tuple[str, ...]
@@ -286,6 +288,7 @@ class MCDCReport:
     coverage_status: str = "not checked"
     warnings: tuple[str, ...] = field(default_factory=tuple)
     interface_graph: dict[str, Any] = field(default_factory=dict)
+    interface_override: "InterfaceOverride | None" = None
 
     @property
     def score(self) -> float:
@@ -358,6 +361,184 @@ class ExcelExportMetadata:
     name: str = "mcdc_testcases"
 
 
+@dataclass(frozen=True)
+class InterfaceOverride:
+    """A test interface (column layout) supplied by a support Excel template.
+
+    The names define exactly which Input / Parameter / Output columns the generated
+    sheet contains and in what order; ``array_sizes`` records how many element columns a
+    repeated header expanded to (defaults to 1 for scalars)."""
+
+    input_names: tuple[str, ...] = field(default_factory=tuple)
+    parameter_names: tuple[str, ...] = field(default_factory=tuple)
+    output_names: tuple[str, ...] = field(default_factory=tuple)
+    array_sizes: dict[str, int] = field(default_factory=dict)
+
+
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+
+def column_index_from_reference(reference: str) -> int:
+    """Convert an A1-style cell reference to a 0-based column index (``A`` -> 0)."""
+    letters = "".join(character for character in reference if character.isalpha())
+    index = 0
+    for character in letters:
+        index = index * 26 + (ord(character.upper()) - ord("A") + 1)
+    return index - 1
+
+
+def read_xlsx_grid(path: Path) -> list[list[Any]]:
+    """Read the first worksheet of an .xlsx file into a dense 2-D grid of cell values.
+
+    Mirrors the project's hand-rolled xlsx writer (zip of XML, no openpyxl dependency).
+    Resolves shared strings, inline strings, booleans, and numbers; missing cells become
+    ``None``."""
+
+    with ZipFile(path) as archive:
+        shared_strings = _read_shared_strings(archive)
+        worksheets = sorted(
+            name for name in archive.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+        )
+        if not worksheets:
+            raise ValueError(f"No worksheet found in {path}.")
+        sheet_xml = archive.read(worksheets[0])
+
+    root = ElementTree.fromstring(sheet_xml)
+    rows_by_number: dict[int, list[Any]] = {}
+    for row_element in root.iter(f"{_XLSX_NS}row"):
+        row_number = int(row_element.get("r", "0") or 0)
+        cells: dict[int, Any] = {}
+        for cell in row_element.iter(f"{_XLSX_NS}c"):
+            reference = cell.get("r")
+            if not reference:
+                continue
+            cells[column_index_from_reference(reference)] = _read_cell_value(cell, shared_strings)
+        width = max(cells) + 1 if cells else 0
+        rows_by_number[row_number] = [cells.get(index) for index in range(width)]
+
+    if not rows_by_number:
+        return []
+    max_row = max(rows_by_number)
+    return [rows_by_number.get(number, []) for number in range(1, max_row + 1)]
+
+
+def _read_shared_strings(archive: ZipFile) -> list[str]:
+    try:
+        data = archive.read("xl/sharedStrings.xml")
+    except KeyError:
+        return []
+    root = ElementTree.fromstring(data)
+    return [
+        "".join(node.text or "" for node in si.iter(f"{_XLSX_NS}t"))
+        for si in root.iter(f"{_XLSX_NS}si")
+    ]
+
+
+def _read_cell_value(cell: ElementTree.Element, shared_strings: list[str]) -> Any:
+    cell_type = cell.get("t")
+    if cell_type == "inlineStr":
+        inline = cell.find(f"{_XLSX_NS}is")
+        if inline is None:
+            return None
+        return "".join(node.text or "" for node in inline.iter(f"{_XLSX_NS}t"))
+    value_node = cell.find(f"{_XLSX_NS}v")
+    if value_node is None or value_node.text is None:
+        return None
+    text = value_node.text
+    if cell_type == "s":
+        index = int(text)
+        return shared_strings[index] if 0 <= index < len(shared_strings) else None
+    if cell_type == "b":
+        return text.strip() not in ("0", "")
+    if cell_type in ("str", "e"):
+        return text
+    return _coerce_numeric(text)
+
+
+def _coerce_numeric(text: str) -> Any:
+    cleaned = text.strip()
+    try:
+        if re.fullmatch(r"[+-]?\d+", cleaned):
+            return int(cleaned)
+        return float(cleaned)
+    except ValueError:
+        return text
+
+
+def parse_support_template(path: Path) -> tuple[InterfaceOverride, ExcelExportMetadata]:
+    """Parse a support Excel template into an interface override and export metadata.
+
+    The template uses the ATG "Format Version 1.3" layout: rows 1-4 carry metadata
+    (label in column A, value in column B); a ``Mode`` row carries the group label at the
+    start of each group; the following ``Step`` row carries the column variable names.
+    Data rows below are ignored. Consecutive repeated headers collapse to an array size."""
+
+    grid = read_xlsx_grid(Path(path))
+
+    def label_of(row: list[Any]) -> Any:
+        value = row[0] if row else None
+        return value.strip() if isinstance(value, str) else value
+
+    metadata_values: dict[str, Any] = {}
+    mode_row_index: int | None = None
+    header_row_index: int | None = None
+    for index, row in enumerate(grid):
+        label = label_of(row)
+        if label in ("Format Version", "Architecture", "Scope", "Name"):
+            metadata_values[label] = row[1] if len(row) > 1 else None
+        elif label == "Mode":
+            mode_row_index = index
+        elif label == "Step":
+            header_row_index = index
+
+    if mode_row_index is None or header_row_index is None:
+        raise ValueError("Support template is missing the 'Mode' and 'Step' header rows.")
+
+    mode_row = grid[mode_row_index]
+    header_row = grid[header_row_index]
+    groups: dict[str, list[str]] = {"Inputs": [], "Parameters": [], "Outputs": []}
+    array_sizes: dict[str, int] = {}
+    current_group: str | None = None
+    width = max(len(mode_row), len(header_row))
+    for column in range(1, width):  # column 0 holds "Mode"/"Step"
+        mode_value = mode_row[column] if column < len(mode_row) else None
+        if isinstance(mode_value, str) and mode_value.strip():
+            current_group = mode_value.strip()
+        header_value = header_row[column] if column < len(header_row) else None
+        if not isinstance(header_value, str) or not header_value.strip():
+            continue
+        name = header_value.strip()
+        bucket = groups.get(current_group or "")
+        if bucket is None:  # Comment or any other non-interface group
+            continue
+        if bucket and bucket[-1] == name:  # consecutive repeat => array element
+            array_sizes[name] = array_sizes.get(name, 1) + 1
+        else:
+            bucket.append(name)
+
+    override = InterfaceOverride(
+        input_names=tuple(groups["Inputs"]),
+        parameter_names=tuple(groups["Parameters"]),
+        output_names=tuple(groups["Outputs"]),
+        array_sizes=array_sizes,
+    )
+    metadata = ExcelExportMetadata(
+        format_version=_metadata_text(metadata_values.get("Format Version"), "1.3"),
+        architecture=_metadata_text(metadata_values.get("Architecture"), ""),
+        scope=_metadata_text(metadata_values.get("Scope"), ""),
+        name=_metadata_text(metadata_values.get("Name"), "mcdc_testcases"),
+    )
+    return override, metadata
+
+
+def _metadata_text(value: Any, default: str) -> str:
+    if value is None or value == "":
+        return default
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def generate_mcdc_report(
     source_path: Path,
     max_conditions: int = MAX_ENUMERATED_CONDITIONS,
@@ -370,11 +551,15 @@ def generate_mcdc_report(
     output_variables: tuple[str, ...] = (),
     manual_outputs: dict[str, TableValue] | None = None,
     mcdc_mode: str = "unique-cause",
+    interface_override: InterfaceOverride | None = None,
 ) -> MCDCReport:
     if mcdc_mode not in MCDC_MODES:
         raise ValueError(f"Unsupported MC/DC mode: {mcdc_mode}")
 
-    source = source_path.read_text(encoding="utf-8")
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        source = source_path.read_text(encoding="latin-1")
     clean_source = strip_comments_and_strings(source)
     decisions = extract_decisions(clean_source)
     detected_input_variables = extract_function_parameters(clean_source, target_function)
@@ -386,11 +571,12 @@ def generate_mcdc_report(
 
     toolchain_details = detect_toolchain_details()
     coverage_ready, coverage_status = summarize_coverage_readiness(toolchain_details)
+    solver_ctx = build_solver_context(interface_analysis)
 
     return MCDCReport(
         source=str(source_path),
         source_text=source,
-        decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode) for decision in decisions),
+        decisions=tuple(generate_decision_result(decision, max_conditions, mcdc_mode, solver_ctx) for decision in decisions),
         input_variables=tuple(dict.fromkeys((*detected_input_variables, *input_variables))),
         manual_inputs=manual_inputs or {},
         output_variables=tuple(dict.fromkeys(output_variables)),
@@ -406,6 +592,7 @@ def generate_mcdc_report(
         coverage_status=coverage_status,
         warnings=tuple(warnings),
         interface_graph=interface_analysis.variable_graph.to_dict(),
+        interface_override=interface_override,
     )
 
 
@@ -760,12 +947,21 @@ def testcase_table(report: MCDCReport) -> dict[str, Any]:
 
 
 def targetlink_logged_interface_table(report: MCDCReport) -> dict[str, Any] | None:
-    interface = extract_log_var_interface(report.source_text)
-    if interface is None:
-        return None
-
-    input_names, parameter_names, output_names, array_sizes, initial_values = interface
-    output_names = targetlink_output_order(output_names)
+    if report.interface_override is not None:
+        override = report.interface_override
+        # A user-supplied support template defines the exact column layout and order;
+        # parameter/array defaults still come from the C source's initial values.
+        initial_values = dict(analyze_c_interface(report.source_text).initial_values)
+        input_names = list(override.input_names)
+        parameter_names = list(override.parameter_names)
+        output_names = list(override.output_names)
+        array_sizes = dict(override.array_sizes)
+    else:
+        interface = extract_log_var_interface(report.source_text)
+        if interface is None:
+            return None
+        input_names, parameter_names, output_names, array_sizes, initial_values = interface
+        output_names = targetlink_output_order(output_names)
     input_columns, input_keys = expand_interface_columns(input_names, array_sizes)
     parameter_columns, parameter_keys = expand_interface_columns(parameter_names, array_sizes)
     output_columns, output_keys = expand_interface_columns(output_names, array_sizes)
@@ -979,7 +1175,7 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
     initial_values = extract_top_level_initial_values(source, global_order)
     global_names = set(global_order)
     local_names = frozenset(extract_local_variables(function_source, global_names))
-    assignment_sources, assignment_targets = extract_assignment_dependencies(function_source, global_names, set(function_parameters))
+    assignment_sources, assignment_targets, assignment_expressions = extract_assignment_dependencies(function_source, global_names, set(function_parameters))
     variable_graph = build_variable_graph(
         clean_source,
         function_source,
@@ -1035,6 +1231,7 @@ def analyze_c_interface(source: str) -> InterfaceAnalysis:
         array_sizes=dict(array_sizes),
         initial_values=initial_values,
         assignment_sources=assignment_sources,
+        assignment_expressions=assignment_expressions,
         assignment_targets=tuple(ordered_assignment_targets),
         condition_input_roots=tuple(order_known_roots(condition_input_roots, global_order, function_parameters)),
         condition_output_roots=tuple(order_known_roots(condition_output_roots, global_order, function_parameters)),
@@ -1132,9 +1329,11 @@ def extract_assignment_dependencies(
     source: str,
     global_names: set[str],
     parameter_names: set[str],
-) -> tuple[dict[str, tuple[str, ...]], set[str]]:
+) -> tuple[dict[str, tuple[str, ...]], set[str], dict[str, str]]:
     assignment_sources: dict[str, tuple[str, ...]] = {}
     assignment_targets: set[str] = set()
+    assignment_expressions: dict[str, str] = {}
+    multiply_assigned: set[str] = set()
     assignment_pattern = re.compile(
         r"(?<![=!<>])(?P<lhs>[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?|\*\s*[A-Za-z_]\w*|\(\s*\*\s*[A-Za-z_]\w*\s*\))\s*=(?!=)\s*(?P<rhs>[^;]+);"
     )
@@ -1146,7 +1345,16 @@ def extract_assignment_dependencies(
         roots = expression_root_variables(rhs, global_names, parameter_names, assignment_sources)
         if roots:
             assignment_sources[lhs] = tuple(dict.fromkeys(roots))
-    return assignment_sources, assignment_targets
+        # Record the RHS expression so the input solver can expand intermediates.
+        # Only single-assignment names are expandable; a name written more than once
+        # is ambiguous (depends on control flow), so it is dropped and treated as a
+        # directly settable variable instead.
+        if lhs in assignment_expressions or lhs in multiply_assigned:
+            multiply_assigned.add(lhs)
+            assignment_expressions.pop(lhs, None)
+        else:
+            assignment_expressions[lhs] = rhs.strip()
+    return assignment_sources, assignment_targets, assignment_expressions
 
 
 def build_variable_graph(
@@ -1512,7 +1720,9 @@ def targetlink_generic_interface_inputs(report: MCDCReport, input_names: list[st
     if not input_names:
         return None
     analysis = analyze_c_interface(report.source_text)
-    root_names = set(analysis.global_order) | set(analysis.function_parameters)
+    settable, expr_map, assignment_sources = build_solver_context(analysis, set(input_names))
+    graph_root_names = set(analysis.global_order) | set(analysis.function_parameters)
+    trace_chain = lambda name: analysis.variable_graph.trace_chain(name, graph_root_names)
     scenarios: list[dict[str, Any]] = []
     seen: set[tuple[str, tuple[tuple[str, TableValue], ...], bool]] = set()
 
@@ -1520,34 +1730,25 @@ def targetlink_generic_interface_inputs(report: MCDCReport, input_names: list[st
         for row in decision.cases:
             inputs = {name: report.manual_inputs.get(name, "MANUAL") for name in input_names}
             notes = list(row.notes)
-            for condition_index, (condition, desired) in enumerate(zip(decision.decision.conditions, row.values)):
-                candidate = value_for_condition(condition, desired)
-                if candidate is None:
-                    continue
-                candidate_name, value = candidate
-                trace_key = f"{decision.decision.id}:{condition_index}"
-                trace = analysis.variable_graph.condition_traces.get(trace_key)
-                roots = tuple(trace.get("roots", ())) if trace else ()
-                if not roots:
-                    roots = resolve_root_variables(
-                        candidate_name,
-                        set(analysis.global_order),
-                        set(analysis.function_parameters),
-                        analysis.assignment_sources,
-                    )
-                assignable_roots = [root for root in roots if root in inputs]
-                if len(assignable_roots) != 1:
-                    if len(assignable_roots) > 1:
-                        notes.append(
-                            f"MANUAL: ambiguous roots [{', '.join(assignable_roots)}] for `{candidate_name}`."
-                        )
-                    continue
-                root = assignable_roots[0]
-                if root in inputs:
-                    inputs[root] = value
-                    if root != candidate_name:
-                        chain = trace.get("chain", []) if trace else analysis.variable_graph.trace_chain(candidate_name, root_names)
-                        notes.append(f"`{condition}` traced {' -> '.join(chain)}.")
+            for condition, desired in zip(decision.decision.conditions, row.values):
+                # Expand the condition (which usually tests an intermediate variable)
+                # back to the external inputs that drive it, assigning the concrete
+                # literal values needed to satisfy the desired truth value.
+                solved, solve_notes = solve_condition_inputs(
+                    condition,
+                    desired,
+                    settable=settable,
+                    expr_map=expr_map,
+                    assignment_sources=assignment_sources,
+                    trace_chain=trace_chain,
+                    prior=inputs,
+                )
+                for name, value in solved.items():
+                    if name in inputs:
+                        inputs[name] = value
+                for note in solve_notes:
+                    if note not in notes:
+                        notes.append(note)
             key = (
                 decision.decision.id,
                 tuple((name, inputs[name]) for name in input_names),
@@ -2168,7 +2369,12 @@ def split_parameter_list(raw_parameters: str) -> list[str]:
     return parameters
 
 
-def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode: str = "unique-cause") -> DecisionResult:
+def generate_decision_result(
+    decision: Decision,
+    max_conditions: int,
+    mcdc_mode: str = "unique-cause",
+    solver_ctx: SolverContext | None = None,
+) -> DecisionResult:
     warnings: list[str] = []
     condition_count = len(decision.conditions)
 
@@ -2177,10 +2383,10 @@ def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode:
 
     if condition_count > max_conditions:
         if mcdc_mode in {"unique-cause", "masking"}:
-            direct_result = generate_direct_chain_result(decision)
+            direct_result = generate_direct_chain_result(decision, solver_ctx)
             if direct_result is not None:
                 return direct_result
-            grouped_result = generate_direct_grouped_and_result(decision)
+            grouped_result = generate_direct_grouped_and_result(decision, solver_ctx)
             if grouped_result is not None:
                 return grouped_result
         message = f"Decision has {condition_count} conditions; capped at {max_conditions} to avoid path explosion."
@@ -2204,7 +2410,7 @@ def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode:
         for values in truth_rows
     }
     if mcdc_mode == "multicondition":
-        return generate_multicondition_result(decision, truth_rows, outcomes)
+        return generate_multicondition_result(decision, truth_rows, outcomes, solver_ctx)
 
     independence_pairs = find_independence_pairs(decision, truth_rows, outcomes, mcdc_mode)
 
@@ -2221,7 +2427,7 @@ def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode:
     environment_gaps: list[Gap] = []
     seen_note_gaps: set[tuple[str, str]] = set()
     for values, covers in sorted(selected_rows.items()):
-        assignments, notes = concretize_conditions(decision.conditions, values)
+        assignments, notes = concretize_conditions(decision.conditions, values, solver_ctx)
         rows.append(
             MCDCRow(
                 values=values,
@@ -2259,7 +2465,7 @@ def generate_decision_result(decision: Decision, max_conditions: int, mcdc_mode:
     )
 
 
-def generate_direct_chain_result(decision: Decision) -> DecisionResult | None:
+def generate_direct_chain_result(decision: Decision, solver_ctx: SolverContext | None = None) -> DecisionResult | None:
     operator = detect_uniform_chain_operator(decision.expression, decision.conditions)
     if operator is None or has_duplicate_conditions(decision.conditions):
         return None
@@ -2287,7 +2493,7 @@ def generate_direct_chain_result(decision: Decision) -> DecisionResult | None:
     environment_gaps: list[Gap] = []
     seen_note_gaps: set[tuple[str, str]] = set()
     for values, covers in sorted(selected_rows.items()):
-        assignments, notes = concretize_conditions(decision.conditions, values)
+        assignments, notes = concretize_conditions(decision.conditions, values, solver_ctx)
         rows.append(
             MCDCRow(
                 values=values,
@@ -2317,7 +2523,7 @@ def generate_direct_chain_result(decision: Decision) -> DecisionResult | None:
     )
 
 
-def generate_direct_grouped_and_result(decision: Decision) -> DecisionResult | None:
+def generate_direct_grouped_and_result(decision: Decision, solver_ctx: SolverContext | None = None) -> DecisionResult | None:
     groups = parse_top_level_and_groups(decision.expression, decision.conditions)
     if groups is None or has_duplicate_conditions(decision.conditions):
         return None
@@ -2350,7 +2556,7 @@ def generate_direct_grouped_and_result(decision: Decision) -> DecisionResult | N
         outcome = evaluate_decision(decision.expression, decision.conditions, values)
         if outcome is None:
             return None
-        assignments, notes = concretize_conditions(decision.conditions, values)
+        assignments, notes = concretize_conditions(decision.conditions, values, solver_ctx)
         rows.append(
             MCDCRow(
                 values=values,
@@ -2458,11 +2664,12 @@ def generate_multicondition_result(
     decision: Decision,
     truth_rows: list[tuple[bool, ...]],
     outcomes: dict[tuple[bool, ...], bool | None],
+    solver_ctx: SolverContext | None = None,
 ) -> DecisionResult:
     rows: list[MCDCRow] = []
     covered_conditions = set()
     for values in truth_rows:
-        assignments, notes = concretize_conditions(decision.conditions, values)
+        assignments, notes = concretize_conditions(decision.conditions, values, solver_ctx)
         rows.append(
             MCDCRow(
                 values=values,
@@ -2654,11 +2861,305 @@ def replace_condition_occurrences(
     return replaced
 
 
-def concretize_conditions(conditions: tuple[str, ...], values: tuple[bool, ...]) -> tuple[dict[str, TableValue], tuple[str, ...]]:
+SolverContext = tuple[set[str], dict[str, str], dict[str, tuple[str, ...]]]
+
+
+def build_solver_context(analysis: "InterfaceAnalysis", settable: set[str] | None = None) -> SolverContext:
+    """Build the (settable, expr_map, assignment_sources) triple the input solver needs.
+
+    ``settable`` defaults to every global and function parameter (the variables that
+    can be driven directly). ``expr_map`` is the set of single-assignment intermediates
+    (locals such as ``Sa9_LogicalOperator1``) that must be expanded to reach the real
+    inputs; names that are themselves settable are excluded so feedback state variables
+    are set directly rather than expanded. ``assignment_sources`` lets the solver fall
+    back to single-root resolution for arithmetic intermediates compared to a literal.
+    """
+
+    if settable is None:
+        settable = set(analysis.global_order) | set(analysis.function_parameters)
+    expr_map = {name: rhs for name, rhs in analysis.assignment_expressions.items() if name not in settable}
+    return settable, expr_map, analysis.assignment_sources
+
+
+def clean_boolean_expression(expression: str) -> str:
+    value = expression.strip()
+    while True:
+        candidate = strip_enclosing_parentheses(value)
+        candidate = strip_simple_casts(candidate).strip()
+        candidate = strip_enclosing_parentheses(candidate)
+        if candidate == value:
+            return candidate
+        value = candidate
+
+
+def split_top_level(expression: str, operator: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and expression[index : index + 2] == operator:
+            parts.append(expression[start:index].strip())
+            start = index + 2
+            index += 2
+            continue
+        index += 1
+    parts.append(expression[start:].strip())
+    return [part for part in parts if part]
+
+
+def parse_condition_atom(expression: str) -> tuple[str | None, str | None, int | float | None]:
+    """Parse a leaf condition into (name, operator, literal).
+
+    A bare identifier (or pointer dereference) returns operator/literal as ``None`` and
+    is interpreted by the caller as a truthiness test (``name != 0``)."""
+
+    cleaned = clean_boolean_expression(expression)
+    numeric_literal = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:[fFlLuU]*)"
+    match = re.fullmatch(rf"(.+?)\s*(==|!=|>=|<=|>|<)\s*{numeric_literal}", cleaned)
+    if match:
+        name, operator, literal_text = match.groups()
+        return canonical_lvalue(name), operator, parse_c_numeric_literal(literal_text)
+    if re.fullmatch(r"[A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)?(?:\s*\[[^\]]+\])?", cleaned):
+        return canonical_lvalue(cleaned), None, None
+    pointer_match = re.fullmatch(r"\(?\s*\*\s*([A-Za-z_]\w*)\s*\)?", cleaned)
+    if pointer_match:
+        return "*" + pointer_match.group(1), None, None
+    return None, None, None
+
+
+def value_satisfies_atom(
+    value: TableValue, operator: str | None, literal: int | float | None, want: bool
+) -> bool:
+    """Return True if ``value`` makes the atom (``name operator literal``) evaluate to ``want``.
+
+    A ``None`` operator means a bare truthiness test (``name != 0``). Used so the solver can
+    keep an already-assigned input when it still satisfies a later condition instead of
+    overwriting it with a conflicting value."""
+
+    if isinstance(value, bool):
+        numeric: float = 1.0 if value else 0.0
+    else:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return False
+    if operator is None:
+        holds = numeric != 0
+    else:
+        comparisons = {
+            "==": numeric == literal,
+            "!=": numeric != literal,
+            ">": numeric > literal,
+            ">=": numeric >= literal,
+            "<": numeric < literal,
+            "<=": numeric <= literal,
+        }
+        if operator not in comparisons:
+            return False
+        holds = comparisons[operator]
+    return holds == want
+
+
+def solve_condition_inputs(
+    condition: str,
+    desired: bool,
+    *,
+    settable: set[str],
+    expr_map: dict[str, str],
+    assignment_sources: dict[str, tuple[str, ...]] | None = None,
+    trace_chain: Callable[[str], list[str]] | None = None,
+    prior: dict[str, TableValue] | None = None,
+) -> tuple[dict[str, TableValue], list[str]]:
+    """Expand a decision condition down to concrete external-input values.
+
+    ``settable`` is the set of variable names backed by input/parameter columns that can
+    be assigned directly. ``expr_map`` maps an intermediate variable to the right-hand
+    side of its single defining assignment so the solver can recurse into the logic that
+    computes it (e.g. ``Sa4_LogicalOperator2`` -> ``(x == 10) || (y == 10)``).
+    ``assignment_sources`` lets the solver fall back to single-root resolution for
+    arithmetic intermediates compared with a literal (e.g. an aliased input). ``prior``
+    holds the values already chosen by earlier conditions in the same decision row; the
+    solver keeps a prior value when it still satisfies the current condition and prefers
+    operands that don't conflict with it, so two conditions sharing one input don't fight
+    (e.g. one needing ``hydact == 30`` and another needing ``hydact != 20``). Returns the
+    inferred input assignments plus notes for anything that could not be resolved.
+    """
+
+    assignment_sources = assignment_sources or {}
+    prior = prior or {}
+    notes: list[str] = []
+
+    def note_once(message: str) -> None:
+        if message not in notes:
+            notes.append(message)
+
+    def conflicts_with_prior(result: dict[str, TableValue]) -> bool:
+        for name, value in result.items():
+            existing = prior.get(name)
+            if existing is not None and existing != "MANUAL" and existing != value:
+                return True
+        return False
+
+    def merge_all(parts: list[str], want: bool, seen: frozenset[str]) -> dict[str, TableValue] | None:
+        combined: dict[str, TableValue] = {}
+        solved_any = False
+        for part in parts:
+            result = solve(part, want, seen)
+            if result is None:
+                continue
+            solved_any = True
+            for name, value in result.items():
+                if name in combined and combined[name] != value:
+                    note_once(f"Conflicting inferred values for `{name}`; kept first value {combined[name]!r}.")
+                    continue
+                combined[name] = value
+        return combined if solved_any else None
+
+    def solve_any(parts: list[str], want: bool, seen: frozenset[str]) -> dict[str, TableValue] | None:
+        # Only one operand needs to hold (OR true / AND false). Prefer one that does not
+        # conflict with inputs already chosen by earlier conditions; fall back to the first
+        # solvable operand otherwise. Notes from operands we do not adopt are rolled back so
+        # they don't pollute the row's setup notes.
+        fallback: dict[str, TableValue] | None = None
+        fallback_notes: list[str] = []
+        leftover_notes: list[str] = []
+        for part in parts:
+            mark = len(notes)
+            result = solve(part, want, seen)
+            added = notes[mark:]
+            del notes[mark:]
+            if result:
+                if not conflicts_with_prior(result):
+                    notes.extend(added)
+                    return result
+                if fallback is None:
+                    fallback, fallback_notes = result, added
+            else:
+                leftover_notes.extend(added)
+        if fallback is not None:
+            notes.extend(fallback_notes)
+            return fallback
+        notes.extend(leftover_notes)
+        return None
+
+    def resolve_single_root(name: str) -> str | None:
+        """Return the sole settable input driving ``name``.
+
+        Returns the root variable name, ``""`` when several inputs drive the value
+        (ambiguous), or ``None`` when no settable root exists.
+        """
+
+        roots = resolve_root_variables(name, settable, set(), assignment_sources)
+        assignable = [root for root in roots if root in settable]
+        if len(assignable) == 1:
+            return assignable[0]
+        if len(assignable) > 1:
+            note_once(f"MANUAL: ambiguous roots [{', '.join(assignable)}] for `{name}`.")
+            return ""
+        return None
+
+    def solve_atom(expression: str, want: bool, seen: frozenset[str]) -> dict[str, TableValue] | None:
+        name, operator, literal = parse_condition_atom(expression)
+        if name is None:
+            note_once(f"MANUAL: could not parse condition `{expression.strip()}`.")
+            return None
+        if name in settable:
+            existing = prior.get(name)
+            if existing is not None and existing != "MANUAL" and value_satisfies_atom(existing, operator, literal, want):
+                return {name: existing}
+            if operator is None:
+                return {name: 1 if want else 0}
+            return {name: candidate_number(operator, literal, want)}
+
+        is_truthiness = operator is None or (literal == 0 and operator in ("!=", "=="))
+        # Boolean intermediates tested for truthiness are expanded through their defining
+        # expression so every driving input is constrained.
+        if is_truthiness and name in expr_map and name not in seen:
+            inner_want = want if operator != "==" else not want
+            return solve(expr_map[name], inner_want, seen | {name})
+
+        # Otherwise (a comparison against a literal, or a truthiness test of a variable we
+        # cannot expand) fall back to single-root resolution: an arithmetic/aliased
+        # intermediate driven by exactly one input maps the comparison onto that input.
+        root = resolve_single_root(name)
+        if root == "":  # ambiguous (multiple driving inputs)
+            return None
+        if root is None:
+            note_once(f"MANUAL: no settable input found for `{name}`.")
+            return None
+        if root != name and trace_chain is not None:
+            chain = trace_chain(name)
+            if len(chain) > 1:
+                note_once(f"`{name}` traced {' -> '.join(chain)}.")
+        resolve_op = operator or "!="
+        resolve_literal = literal if literal is not None else 0
+        return {root: candidate_number(resolve_op, resolve_literal, want)}
+
+    def solve(expression: str, want: bool, seen: frozenset[str]) -> dict[str, TableValue] | None:
+        expr = clean_boolean_expression(expression)
+        while expr.startswith("!") and not expr.startswith("!="):
+            want = not want
+            expr = clean_boolean_expression(expr[1:])
+        if not expr:
+            return None
+
+        or_parts = split_top_level(expr, "||")
+        if len(or_parts) > 1:
+            # OR is true when any operand is true; false only when all are false.
+            return solve_any(or_parts, True, seen) if want else merge_all(or_parts, False, seen)
+
+        and_parts = split_top_level(expr, "&&")
+        if len(and_parts) > 1:
+            # AND is true when all operands are true; false when any one is false.
+            return merge_all(and_parts, True, seen) if want else solve_any(and_parts, False, seen)
+
+        return solve_atom(expr, want, seen)
+
+    result = solve(condition, desired, frozenset())
+    return (result or {}), notes
+
+
+def concretize_conditions(
+    conditions: tuple[str, ...],
+    values: tuple[bool, ...],
+    solver_ctx: SolverContext | None = None,
+) -> tuple[dict[str, TableValue], tuple[str, ...]]:
     assignments: dict[str, TableValue] = {}
     notes: list[str] = []
 
+    def record(name: str, value: TableValue) -> None:
+        if name in assignments and assignments[name] != value:
+            notes.append(f"Conflicting inferred values for `{name}`; kept first value {assignments[name]!r}.")
+            return
+        assignments[name] = value
+
     for condition, desired in zip(conditions, values):
+        if solver_ctx is not None:
+            settable, expr_map, assignment_sources = solver_ctx
+            solved, solve_notes = solve_condition_inputs(
+                condition,
+                desired,
+                settable=settable,
+                expr_map=expr_map,
+                assignment_sources=assignment_sources,
+                prior=assignments,
+            )
+            if solved:
+                for name, value in solved.items():
+                    record(name, value)
+                continue
+            # Fall through to the simple per-condition inference below, preserving the
+            # previous behaviour for conditions the solver could not expand.
+            for note in solve_notes:
+                if note not in notes:
+                    notes.append(note)
+
         candidate = value_for_condition(condition, desired)
         if candidate is None:
             notes.append(f"No simple concrete value inferred for `{condition}` = {desired}.")

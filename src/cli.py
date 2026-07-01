@@ -3,7 +3,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.services.mcdc_generator import MCDC_MODES, generate_mcdc_report, write_report_artifacts
+from src.services.mcdc_generator import (
+    MCDC_MODES,
+    ExcelExportMetadata,
+    generate_mcdc_report,
+    parse_support_template,
+    write_report_artifacts,
+)
 
 ManualValue = int | float | bool | str
 
@@ -27,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Optional .h file recorded for future harness/build integration.",
+    )
+    parser.add_argument(
+        "--support-template",
+        type=Path,
+        help="Optional support Excel (.xlsx) template defining the Input/Parameter/Output columns to generate.",
     )
     parser.add_argument(
         "--target-function",
@@ -88,6 +99,18 @@ def main(argv: list[str] | None = None) -> int:
         if not include_dir.exists() or not include_dir.is_dir():
             raise SystemExit(f"Include directory not found: {include_dir}")
 
+    interface_override = None
+    excel_metadata: ExcelExportMetadata | None = None
+    if args.support_template is not None:
+        if not args.support_template.exists():
+            raise SystemExit(f"Support template not found: {args.support_template}")
+        if args.support_template.suffix.lower() != ".xlsx":
+            raise SystemExit("Support template must be a .xlsx file.")
+        try:
+            interface_override, excel_metadata = parse_support_template(args.support_template)
+        except (ValueError, KeyError) as error:
+            raise SystemExit(f"Could not parse support template: {error}")
+
     input_variables, manual_inputs = parse_variable_setup(args.input_variable)
     output_variables, manual_outputs = parse_variable_setup(args.output_variable)
     report = generate_mcdc_report(
@@ -102,8 +125,11 @@ def main(argv: list[str] | None = None) -> int:
         output_variables=output_variables,
         manual_outputs=manual_outputs,
         mcdc_mode=args.mcdc_mode,
+        interface_override=interface_override,
     )
-    json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(report, args.output_dir)
+    json_path, harness_path, gap_report_path, excel_path = write_report_artifacts(
+        report, args.output_dir, excel_metadata=excel_metadata
+    )
 
     print(f"Generated MC/DC target score ({report.mcdc_mode}): {report.score:.1%}")
     print(f"Cases: {json_path}")
